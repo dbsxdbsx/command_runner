@@ -1,22 +1,30 @@
 [package]
-name ="command_runner"
-version = "0.1.0"
-edition = "2021"
+    name         ="command_runner"
+    version      ="0.1.0"
+    edition      ="2021"
+    description  ="A library for running system commands"
+    license      ="MIT OR Apache-2.0"
+    repository   ="https://github.com/dbsxdbsx/command_runner"
+    documentation="https://docs.rs/command_runner"
+    readme       ="README.md"
+    keywords     =["command", "runner", "system", "interactive", "cross-platform"]
+    categories   =["command-line-interface"]
+    rust-version ="1.79"
 
 [lib]
-crate-type = ["rlib", "cdylib", "staticlib"]
+    crate-type=["rlib", "cdylib", "staticlib"]
 
 [profile.release]
-lto = true
-codegen-units = 1
-strip = "debuginfo"
+    lto          =true
+    codegen-units=1
+    strip        ="debuginfo"
+    opt-level    =3
 
 [profile.dev.package."*"]
-opt-level = 3
+    opt-level=3
 
 [dependencies]
 
 [dev-dependencies]
 
 [features]
-# 如果您的crate支持可选功能,可以在这里定义

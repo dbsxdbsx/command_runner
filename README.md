@@ -1,0 +1,67 @@
+# command_runner
+
+`command_runner` is a cross-platform Rust crate designed for executing terminal commands interactively. It wraps various features in a struct to provide a seamless command execution experience.
+
+## Key Features
+
+1. **Execute Command Line Instructions**: Run any command line instruction from within your Rust application.
+2. **Check Command Execution Status**: Determine if a command executed successfully.
+3. **Fetch Command Output**: Retrieve the real-time output of the command, similar to what you would see in a terminal.
+4. **Handle User Input**: If a running command requires user input, the crate provides a way to input data easily while still capturing the command's output.
+5. **Cross-Platform Compatibility**: Works seamlessly across different platforms, including Linux, macOS, Windows, and mobile platforms like Android.
+
+## Installation
+
+Add the following to your `Cargo.toml`:
+
+```toml
+[dependencies]
+command_runner = "*"
+```
+
+## Usage Example
+
+```rust
+use command_runner::CommandRunner;
+
+fn main() {
+    let mut runner = CommandRunner::new();
+
+    // Execute a command
+    runner.execute("echo Hello, World!");
+
+    // Check if the command was successful
+    if runner.is_successful() {
+        println!("Command executed successfully!");
+    }
+
+    // Get the command output
+    let output = runner.get_output();
+    println!("Command output: {}", output);
+
+    // Handle user input
+    runner.execute("read -p 'Enter your name: ' name && echo \"Hello, $name!\"");
+    runner.provide_input("John Doe");
+
+    // Get the final output
+    let final_output = runner.get_output();
+    println!("Final output: {}", final_output);
+}
+```
+
+## Documentation
+
+For more detailed usage instructions and API documentation, please visit [docs.rs](https://docs.rs/command_runner).
+
+## Contribution
+
+We welcome issues and pull requests. For major changes, please open an issue first to discuss what you would like to change.
+
+## License
+
+This crate is dual-licensed under either:
+
+- Apache License, Version 2.0 (http://www.apache.org/licenses/LICENSE-2.0)
+- MIT license (http://opensource.org/licenses/MIT)
+
+Choose the license that best fits your needs.

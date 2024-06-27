@@ -1,0 +1,22 @@
+[package]
+name ="command_runner"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = "debuginfo"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[dependencies]
+
+[dev-dependencies]
+
+[features]
+# 如果您的crate支持可选功能,可以在这里定义

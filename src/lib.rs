@@ -1,4 +1,4 @@
-use encoding_rs::{Encoding, UTF_8};
+use encoding_rs::GB18030;
 use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -63,7 +63,7 @@ impl CommandRunner {
                         Ok(n) => {
                             let mut output = output_clone.lock().unwrap();
                             if output.len() < max_output_size {
-                                let (decoded, _) = UTF_8.decode_without_bom_handling(&buffer[..n]);
+                                let (decoded, _, _) = GB18030.decode(&buffer[..n]);
                                 output.push(decoded.into_owned());
                             }
                         }
@@ -84,7 +84,7 @@ impl CommandRunner {
                         Ok(n) => {
                             let mut output = output_clone.lock().unwrap();
                             if output.len() < max_output_size {
-                                let (decoded, _) = UTF_8.decode_without_bom_handling(&buffer[..n]);
+                                let (decoded, _, _) = GB18030.decode(&buffer[..n]);
                                 output.push(decoded.into_owned());
                             }
                         }
@@ -153,9 +153,25 @@ impl CommandRunner {
 
 #[cfg(test)]
 mod tests {
+    use encoding_rs::GBK;
+
     use super::*;
 
     use std::time::Duration;
+
+    #[test]
+    fn test_gbk() {
+        let output = Command::new("ping")
+            .arg("-n")
+            .arg("2")
+            .arg("google.com")
+            .stdout(Stdio::piped())
+            .output()
+            .expect("Failed to execute command");
+
+        let (decoded_output, _, _) = GBK.decode(&output.stdout);
+        println!("Decoded Output: {}", decoded_output);
+    }
 
     #[test]
     fn test_successful_command() {

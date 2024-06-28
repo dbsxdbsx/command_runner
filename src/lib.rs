@@ -170,6 +170,7 @@ impl CommandRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     use std::time::Duration;
 
     #[test]
@@ -179,7 +180,8 @@ mod tests {
         } else {
             "-c"
         };
-        let ping_command = format!("ping {} 2 google.com", ping_count_option);
+        let ping_num = 2;
+        let ping_command = format!("ping {} {} google.com", ping_count_option, ping_num);
         let mut runner =
             CommandRunner::new(&ping_command, 10000).expect("Failed to create CommandRunner");
 
@@ -197,7 +199,7 @@ mod tests {
             thread::sleep(Duration::from_millis(500));
         }
 
-        assert!(output_count > 0, "No output received");
+        assert!(output_count > ping_num, "No output received");
         assert_eq!(runner.get_status(), CommandStatus::Terminated);
     }
 
@@ -206,4 +208,50 @@ mod tests {
         let result = CommandRunner::new("nonexistent_command", 10000);
         assert!(result.is_err());
     }
+
+    // TODO:
+    // #[test]
+    // fn test_provide_input() {
+    //     // 假设 guessing_game 项目已经编译为可执行文件
+    //     let app = "python";
+    //     let mut runner =
+    //         CommandRunner::new(app, 10000).expect("Failed to create CommandRunner");
+
+    //     // 检查初始反馈是否为 `>>>`
+    //     // let mut initial_feedback_received = false;
+    //     // loop {
+    //     //     if let Some(output) = runner.get_output() {
+    //     //         println!("Got Output: {}", output);
+    //     //         if output.trim() == ">>>" {
+    //     //             initial_feedback_received = true;
+    //     //             break;
+    //     //         }
+    //     //     }
+    //     //     let status = runner.get_status();
+    //     //     println!("Current status: {:?}", status);
+    //     //     if status == CommandStatus::Terminated {
+    //     //         break;
+    //     //     }
+    //     //     thread::sleep(Duration::from_millis(500));
+    //     // }
+
+    //     // assert!(initial_feedback_received, "Initial feedback not received");
+
+    //     // 输入 `exit()`
+    //     runner
+    //         .provide_input("exit()\n")
+    //         .expect("Failed to provide input");
+
+    //     // 检查命令是否终止
+    //     loop {
+    //         let status = runner.get_status();
+    //         println!("Current status: {:?}", status);
+    //         if status == CommandStatus::Terminated {
+    //             break;
+    //         }
+    //         thread::sleep(Duration::from_millis(500));
+    //     }
+
+    //     assert_eq!(runner.get_status(), CommandStatus::Terminated);
+    // }
 }

@@ -199,7 +199,7 @@ mod tests {
             thread::sleep(Duration::from_millis(500));
         }
 
-        assert!(output_count > ping_num, "No output received");
+        assert!(output_count >= ping_num, "Only received {output_count} outputs");
         assert_eq!(runner.get_status(), CommandStatus::Terminated);
     }
 

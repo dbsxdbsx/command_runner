@@ -22,30 +22,28 @@ command_runner = "*"
 ## Usage Example
 
 ```rust
+use anyhow::Result;
 use command_runner::CommandRunner;
 
-fn main() {
-    let mut runner = CommandRunner::new();
-
-    // Execute a command
-    runner.execute("echo Hello, World!");
-
-    // Check if the command was successful
-    if runner.is_successful() {
+fn main() -> Result<()> {
+    let mut runner = CommandRunner::new("echo Hello, World!", 1024)?;
+    // Check if the command was executed successfully
+    if runner.get_status() == CommandStatus::Terminated {
         println!("Command executed successfully!");
     }
-
     // Get the command output
-    let output = runner.get_output();
-    println!("Command output: {}", output);
-
+    while let Some(output) = runner.get_output() {
+        println!("Command output: {}", output);
+    }
     // Handle user input
-    runner.execute("read -p 'Enter your name: ' name && echo \"Hello, $name!\"");
-    runner.provide_input("John Doe");
-
+    runner.execute("read -p 'Enter your name: ' name && echo \"Hello, $name\"")?;
+    runner.provide_input("John Doe\n")?;
     // Get the final output
-    let final_output = runner.get_output();
-    println!("Final output: {}", final_output);
+    while let Some(final_output) = runner.get_output() {
+        println!("Final output: {}", final_output);
+    }
+
+    Ok(())
 }
 ```
 

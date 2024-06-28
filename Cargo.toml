@@ -24,6 +24,8 @@
     opt-level=3
 
 [dependencies]
+    anyhow   ="1"
+    # thiserror="1"
 
 [dev-dependencies]
 

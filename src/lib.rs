@@ -1,7 +1,6 @@
-use anyhow::{Context, Result};
+use encoding_rs::{Encoding, UTF_8};
 use std::io::{self, Read, Write};
-use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -13,110 +12,92 @@ pub enum CommandStatus {
 }
 
 pub struct CommandRunner {
+    child: Option<std::process::Child>,
     output: Arc<Mutex<Vec<String>>>,
-    running: Arc<AtomicBool>,
-    child: Option<Child>,
-    max_output_size: usize,
+    running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl CommandRunner {
-    pub fn new(cmd: &str, max_output_size: usize) -> Result<Self> {
-        let mut runner = CommandRunner {
-            output: Arc::new(Mutex::new(Vec::new())),
-            running: Arc::new(AtomicBool::new(false)),
-            child: None,
-            max_output_size,
-        };
-        runner.execute(cmd)?;
-        Ok(runner)
-    }
-
-    fn execute(&mut self, cmd: &str) -> Result<()> {
-        let mut command = if cfg!(target_os = "windows") {
-            let mut c = Command::new("cmd");
-            c.arg("/C").arg(cmd);
-            c
+    pub fn new(command: &str, max_output_size: usize) -> Result<Self, io::Error> {
+        let (cmd_exe, param1) = if cfg!(target_os = "windows") {
+            ("cmd", "/C")
         } else {
-            let mut c = Command::new("sh");
-            c.arg("-c").arg(cmd);
-            c
+            ("sh", "-c")
         };
 
-        command.stdout(Stdio::piped());
-        command.stderr(Stdio::piped());
-        command.stdin(Stdio::piped());
+        let mut child = Command::new(cmd_exe)
+            .arg(param1)
+            .arg(command)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::piped())
+            .spawn()?;
 
-        let mut child = command.spawn().context("Failed to spawn command")?;
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
-        // 等待一小段时间，让进程有机会启动并可能失败
         thread::sleep(Duration::from_millis(100));
-        // 检查进程是否已经退出
+
         match child.try_wait() {
             Ok(Some(status)) => {
                 if !status.success() {
-                    return Err(anyhow::anyhow!("Command failed with exit code: {}", status));
+                    return Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        format!("Command failed with exit code: {}", status),
+                    ));
                 }
             }
-            Ok(None) => {} // 进程仍在运行，这是正常的
+            Ok(None) => {} // Process is still running, this is normal
             Err(e) => return Err(e.into()),
         }
 
-        self.child = Some(child);
-
-        let output = Arc::clone(&self.output);
-        let running = Arc::clone(&self.running);
-        running.store(true, Ordering::SeqCst);
-
-        let mut stdout = self
-            .child
-            .as_mut()
-            .unwrap()
-            .stdout
-            .take()
-            .expect("Failed to open stdout");
-        let mut stderr = self
-            .child
-            .as_mut()
-            .unwrap()
-            .stderr
-            .take()
-            .expect("Failed to open stderr");
-
+        let output_clone = Arc::clone(&output);
         let running_clone = Arc::clone(&running);
-        let max_output_size = self.max_output_size;
+        let stdout = child.stdout.take();
         thread::spawn(move || {
             let mut buffer = [0; 128];
-            while running_clone.load(Ordering::SeqCst) {
-                match stdout.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let mut output = output.lock().unwrap();
-                        if output.len() < max_output_size {
-                            output.push(String::from_utf8_lossy(&buffer[..n]).to_string());
+            if let Some(mut stdout) = stdout {
+                while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                    match stdout.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut output = output_clone.lock().unwrap();
+                            if output.len() < max_output_size {
+                                let (decoded, _) = UTF_8.decode_without_bom_handling(&buffer[..n]);
+                                output.push(decoded.into_owned());
+                            }
                         }
                     }
                 }
             }
         });
 
-        let output = Arc::clone(&self.output);
+        let output_clone = Arc::clone(&output);
         let running_clone = Arc::clone(&running);
+        let stderr = child.stderr.take();
         thread::spawn(move || {
             let mut buffer = [0; 128];
-            while running_clone.load(Ordering::SeqCst) {
-                match stderr.read(&mut buffer) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => {
-                        let mut output = output.lock().unwrap();
-                        if output.len() < max_output_size {
-                            output.push(String::from_utf8_lossy(&buffer[..n]).to_string());
+            if let Some(mut stderr) = stderr {
+                while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
+                    match stderr.read(&mut buffer) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut output = output_clone.lock().unwrap();
+                            if output.len() < max_output_size {
+                                let (decoded, _) = UTF_8.decode_without_bom_handling(&buffer[..n]);
+                                output.push(decoded.into_owned());
+                            }
                         }
                     }
                 }
             }
         });
 
-        Ok(())
+        Ok(CommandRunner {
+            child: Some(child),
+            output,
+            running,
+        })
     }
 
     pub fn get_output(&self) -> Option<String> {
@@ -128,12 +109,14 @@ impl CommandRunner {
         if let Some(child) = &mut self.child {
             match child.try_wait() {
                 Ok(Some(_)) => {
-                    self.running.store(false, Ordering::SeqCst);
+                    self.running
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                     CommandStatus::Terminated
                 }
                 Ok(None) => CommandStatus::Running,
                 Err(_) => {
-                    self.running.store(false, Ordering::SeqCst);
+                    self.running
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
                     CommandStatus::Terminated
                 }
             }
@@ -145,7 +128,8 @@ impl CommandRunner {
     pub fn terminate(&mut self) -> Result<CommandStatus, io::Error> {
         if let Some(child) = &mut self.child {
             child.kill()?;
-            self.running.store(false, Ordering::SeqCst);
+            self.running
+                .store(false, std::sync::atomic::Ordering::SeqCst);
             child.wait()?;
             Ok(CommandStatus::Terminated)
         } else {
@@ -188,18 +172,21 @@ mod tests {
         let mut output_count = 0;
         loop {
             if let Some(output) = runner.get_output() {
-                println!("Got Output: {}", output);
+                println!("Got terminal Output:\n{}", output);
                 output_count += 1;
             }
             let status = runner.get_status();
-            println!("Current status: {:?}", status);
+            println!("Got terminal status: {:?}", status);
             if status == CommandStatus::Terminated {
                 break;
             }
             thread::sleep(Duration::from_millis(500));
         }
 
-        assert!(output_count >= ping_num, "Only received {output_count} outputs");
+        assert!(
+            output_count >= ping_num,
+            "Only received {output_count} outputs"
+        );
         assert_eq!(runner.get_status(), CommandStatus::Terminated);
     }
 

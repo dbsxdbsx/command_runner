@@ -20,7 +20,6 @@ version = "0.1.2"
 dependencies = [
  "anyhow",
  "encoding_rs",
- "utf8-command",
 ]
 
 [[package]]
@@ -31,9 +30,3 @@ checksum = "b45de904aa0b010bce2ab45264d0631681847fa7b6f2eaa7dab7619943bc4f59"
 dependencies = [
  "cfg-if",
 ]
-
-[[package]]
-name = "utf8-command"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e4b151524c94cda49046b29e6d20b03092ff9363b02acc1bf3994da60910c55b"

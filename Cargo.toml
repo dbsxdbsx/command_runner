@@ -26,8 +26,6 @@
 [dependencies]
     anyhow   ="1"
     encoding_rs = "0.8"
-    utf8-command = "1"
-
 
     # thiserror="1"
 

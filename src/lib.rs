@@ -42,8 +42,12 @@ impl CommandRunner {
         let stderr = child.stderr.take().expect("Failed to capture stderr");
         let (error_tx, error_rx) = mpsc::channel();
 
-        Self::spawn_reader_thread(BufReader::new(stdout), Arc::clone(&output));
-        Self::spawn_error_thread(BufReader::new(stderr), Arc::clone(&output), error_tx);
+        Self::spawn_io_thread(
+            BufReader::new(stdout),
+            BufReader::new(stderr),
+            Arc::clone(&output),
+            error_tx,
+        );
 
         Ok(CommandRunner {
             child,
@@ -52,18 +56,22 @@ impl CommandRunner {
         })
     }
 
-    fn spawn_reader_thread<R: 'static + Send + BufRead>(
-        reader: R,
+    fn spawn_io_thread<STDOUT: 'static + Send + BufRead, STDERR: 'static + Send + BufRead>(
+        stdout_reader: STDOUT,
+        stderr_reader: STDERR,
         output: Arc<Mutex<Vec<String>>>,
+        error_tx: mpsc::Sender<String>,
     ) {
         thread::spawn(move || {
-            let mut reader = reader;
+            let mut stdout_reader = stdout_reader;
+            let mut stderr_reader = stderr_reader;
             let mut buffer = Vec::new();
+
             loop {
                 buffer.clear();
-                match reader.read_until(b'\n', &mut buffer) {
-                    Ok(0) => break, // EOF
-                    Ok(_) => {
+                let stdout_result = stdout_reader.read_until(b'\n', &mut buffer);
+                if let Ok(bytes_read) = stdout_result {
+                    if bytes_read > 0 {
                         let (decoded, _, _) = GB18030.decode(&buffer);
                         let line = decoded.trim_end().to_string();
                         if !line.is_empty() {
@@ -71,25 +79,12 @@ impl CommandRunner {
                             output.push(line);
                         }
                     }
-                    Err(_) => break,
                 }
-            }
-        });
-    }
 
-    fn spawn_error_thread<R: 'static + Send + BufRead>(
-        reader: R,
-        output: Arc<Mutex<Vec<String>>>,
-        error_tx: mpsc::Sender<String>,
-    ) {
-        thread::spawn(move || {
-            let mut reader = reader;
-            let mut buffer = Vec::new();
-            loop {
                 buffer.clear();
-                match reader.read_until(b'\n', &mut buffer) {
-                    Ok(0) => break, // EOF
-                    Ok(_) => {
+                let stderr_result = stderr_reader.read_until(b'\n', &mut buffer);
+                if let Ok(bytes_read) = stderr_result {
+                    if bytes_read > 0 {
                         let (decoded, _, _) = GB18030.decode(&buffer);
                         let line = decoded.trim_end().to_string();
                         if !line.is_empty() {
@@ -98,7 +93,10 @@ impl CommandRunner {
                             let _ = error_tx.send(line);
                         }
                     }
-                    Err(_) => break,
+                }
+
+                if stdout_result.is_err() && stderr_result.is_err() {
+                    break;
                 }
             }
         });

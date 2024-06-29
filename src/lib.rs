@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use encoding_rs::GB18030;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -171,7 +171,26 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_successful_command() {
+    fn test_valid_command() {
+        // valid command1
+        let mut result = CommandRunner::run("echo", 10000).unwrap();
+        assert_eq!(result.get_status(), CommandStatus::Running);
+        // valid command2
+        let mut runner =
+            CommandRunner::run("sleep 2", 10000).expect("Failed to create CommandRunner");
+        assert_eq!(runner.get_status(), CommandStatus::Running);
+        thread::sleep(Duration::from_secs(2));
+        assert_eq!(runner.get_status(), CommandStatus::RunOver);
+    }
+
+    #[test]
+    fn test_invalid_command() {
+        let mut result = CommandRunner::run("invalid_command", 10000).unwrap();
+        assert_eq!(result.get_status(), CommandStatus::ErrTerminated);
+    }
+
+    #[test]
+    fn test_command_feedback() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {
@@ -200,15 +219,5 @@ mod tests {
             "Only received {output_count} outputs"
         );
         assert_eq!(runner.get_status(), CommandStatus::RunOver);
-    }
-
-    #[test]
-    fn test_panic_command() {
-        // valid command
-        let mut result = CommandRunner::run("echo", 10000).unwrap();
-        assert_eq!(result.get_status(), CommandStatus::Running);
-        // err command
-        let mut result = CommandRunner::run("nonexistent_command", 10000).unwrap();
-        assert_eq!(result.get_status(), CommandStatus::ErrTerminated);
     }
 }

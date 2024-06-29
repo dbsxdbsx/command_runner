@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     }
     // Handle user input
     runner.execute("read -p 'Enter your name: ' name && echo \"Hello, $name\"")?;
-    runner.provide_input("John Doe\n")?;
+    runner.input_when_running("John Doe\n")?;
     // Get the final output
     while let Some(final_output) = runner.get_output() {
         println!("Final output: {}", final_output);

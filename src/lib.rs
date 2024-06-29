@@ -1,9 +1,10 @@
 use encoding_rs::GB18030;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
+use which::which;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
@@ -18,7 +19,7 @@ pub struct CommandRunner {
 }
 
 impl CommandRunner {
-    pub fn new(command: &str, max_output_size: usize) -> Result<Self, io::Error> {
+    pub fn new(command: &str, max_output_size: usize) -> io::Result<Self> {
         let (cmd_exe, param1) = if cfg!(target_os = "windows") {
             ("cmd", "/C")
         } else {
@@ -36,68 +37,76 @@ impl CommandRunner {
         let output = Arc::new(Mutex::new(Vec::new()));
         let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
+        let stdout = child.stdout.take().expect("Failed to capture stdout");
+        let stderr = child.stderr.take().expect("Failed to capture stderr");
+
+        // 创建一个用于存储stderr输出的缓冲区
+        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
+
+        Self::spawn_reader_thread(
+            stdout,
+            Arc::clone(&output),
+            Arc::clone(&running),
+            max_output_size,
+        );
+        Self::spawn_reader_thread(
+            stderr,
+            Arc::clone(&stderr_buffer),
+            Arc::clone(&running),
+            max_output_size,
+        );
+
+        // 等待一小段时间，让命令有机会产生一些输出
         thread::sleep(Duration::from_millis(100));
 
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return Err(io::Error::new(
-                        io::ErrorKind::Other,
-                        format!("Command failed with exit code: {}", status),
-                    ));
-                }
-            }
-            Ok(None) => {} // Process is still running, this is normal
-            Err(e) => return Err(e.into()),
+        // 检查stderr是否有输出
+        let stderr_output = stderr_buffer.lock().unwrap();
+        if !stderr_output.is_empty() {
+            let error_message = stderr_output.join("\n");
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Command produced error output: {}", error_message),
+            ));
         }
-
-        let output_clone = Arc::clone(&output);
-        let running_clone = Arc::clone(&running);
-        let stdout = child.stdout.take();
-        thread::spawn(move || {
-            let mut buffer = [0; 128];
-            if let Some(mut stdout) = stdout {
-                while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                    match stdout.read(&mut buffer) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            let mut output = output_clone.lock().unwrap();
-                            if output.len() < max_output_size {
-                                let (decoded, _, _) = GB18030.decode(&buffer[..n]);
-                                output.push(decoded.into_owned());
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        let output_clone = Arc::clone(&output);
-        let running_clone = Arc::clone(&running);
-        let stderr = child.stderr.take();
-        thread::spawn(move || {
-            let mut buffer = [0; 128];
-            if let Some(mut stderr) = stderr {
-                while running_clone.load(std::sync::atomic::Ordering::SeqCst) {
-                    match stderr.read(&mut buffer) {
-                        Ok(0) | Err(_) => break,
-                        Ok(n) => {
-                            let mut output = output_clone.lock().unwrap();
-                            if output.len() < max_output_size {
-                                let (decoded, _, _) = GB18030.decode(&buffer[..n]);
-                                output.push(decoded.into_owned());
-                            }
-                        }
-                    }
-                }
-            }
-        });
 
         Ok(CommandRunner {
             child: Some(child),
             output,
             running,
         })
+    }
+
+    fn spawn_reader_thread<R: io::Read + Send + 'static>(
+        reader: R,
+        output: Arc<Mutex<Vec<String>>>,
+        running: Arc<std::sync::atomic::AtomicBool>,
+        max_output_size: usize,
+    ) {
+        thread::spawn(move || {
+            let mut reader = BufReader::new(reader);
+            let mut buffer = Vec::new();
+            loop {
+                if !running.load(std::sync::atomic::Ordering::SeqCst) {
+                    break;
+                }
+
+                buffer.clear();
+                match reader.read_until(b'\n', &mut buffer) {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        let (decoded, _, _) = GB18030.decode(&buffer);
+                        let line = decoded.trim_end().to_string();
+                        if !line.is_empty() {
+                            let mut output = output.lock().unwrap();
+                            if output.len() < max_output_size {
+                                output.push(line);
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
     }
 
     pub fn get_output(&self) -> Option<String> {
@@ -125,7 +134,7 @@ impl CommandRunner {
         }
     }
 
-    pub fn terminate(&mut self) -> Result<CommandStatus, io::Error> {
+    pub fn terminate(&mut self) -> io::Result<CommandStatus> {
         if let Some(child) = &mut self.child {
             child.kill()?;
             self.running
@@ -140,7 +149,7 @@ impl CommandRunner {
         }
     }
 
-    pub fn provide_input(&mut self, input: &str) -> Result<(), io::Error> {
+    pub fn provide_input(&mut self, input: &str) -> io::Result<()> {
         if let Some(child) = &mut self.child {
             if let Some(stdin) = &mut child.stdin {
                 stdin.write_all(input.as_bytes())?;
@@ -153,25 +162,8 @@ impl CommandRunner {
 
 #[cfg(test)]
 mod tests {
-    use encoding_rs::GBK;
-
     use super::*;
-
     use std::time::Duration;
-
-    #[test]
-    fn test_gbk() {
-        let output = Command::new("ping")
-            .arg("-n")
-            .arg("2")
-            .arg("google.com")
-            .stdout(Stdio::piped())
-            .output()
-            .expect("Failed to execute command");
-
-        let (decoded_output, _, _) = GBK.decode(&output.stdout);
-        println!("Decoded Output: {}", decoded_output);
-    }
 
     #[test]
     fn test_successful_command() {
@@ -189,10 +181,10 @@ mod tests {
         loop {
             if let Some(output) = runner.get_output() {
                 println!("Got terminal Output:\n{}", output);
+                assert!(!output.trim().is_empty());
                 output_count += 1;
             }
             let status = runner.get_status();
-            println!("Got terminal status: {:?}", status);
             if status == CommandStatus::Terminated {
                 break;
             }
@@ -208,53 +200,12 @@ mod tests {
 
     #[test]
     fn test_panic_command() {
+        // valid command
+        let result = CommandRunner::new("echo", 10000);
+        assert!(result.is_ok());
+
+        // err command
         let result = CommandRunner::new("nonexistent_command", 10000);
         assert!(result.is_err());
     }
-
-    // TODO:
-    // #[test]
-    // fn test_provide_input() {
-    //     // 假设 guessing_game 项目已经编译为可执行文件
-    //     let app = "python";
-    //     let mut runner =
-    //         CommandRunner::new(app, 10000).expect("Failed to create CommandRunner");
-
-    //     // 检查初始反馈是否为 `>>>`
-    //     // let mut initial_feedback_received = false;
-    //     // loop {
-    //     //     if let Some(output) = runner.get_output() {
-    //     //         println!("Got Output: {}", output);
-    //     //         if output.trim() == ">>>" {
-    //     //             initial_feedback_received = true;
-    //     //             break;
-    //     //         }
-    //     //     }
-    //     //     let status = runner.get_status();
-    //     //     println!("Current status: {:?}", status);
-    //     //     if status == CommandStatus::Terminated {
-    //     //         break;
-    //     //     }
-    //     //     thread::sleep(Duration::from_millis(500));
-    //     // }
-
-    //     // assert!(initial_feedback_received, "Initial feedback not received");
-
-    //     // 输入 `exit()`
-    //     runner
-    //         .provide_input("exit()\n")
-    //         .expect("Failed to provide input");
-
-    //     // 检查命令是否终止
-    //     loop {
-    //         let status = runner.get_status();
-    //         println!("Current status: {:?}", status);
-    //         if status == CommandStatus::Terminated {
-    //             break;
-    //         }
-    //         thread::sleep(Duration::from_millis(500));
-    //     }
-
-    //     assert_eq!(runner.get_status(), CommandStatus::Terminated);
-    // }
 }

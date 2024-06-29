@@ -1,25 +1,27 @@
+use anyhow::{Context, Result};
 use encoding_rs::GB18030;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use which::which;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
     Running,
-    Terminated,
+    RunOver,
+    ErrTerminated,
 }
 
 pub struct CommandRunner {
-    child: Option<std::process::Child>,
+    child: std::process::Child,
     output: Arc<Mutex<Vec<String>>>,
-    running: Arc<std::sync::atomic::AtomicBool>,
+    error_rx: mpsc::Receiver<String>,
 }
 
 impl CommandRunner {
-    pub fn new(command: &str, max_output_size: usize) -> io::Result<Self> {
+    pub fn run(command: &str, max_output_size: usize) -> Result<Self> {
         let (cmd_exe, param1) = if cfg!(target_os = "windows") {
             ("cmd", "/C")
         } else {
@@ -32,64 +34,38 @@ impl CommandRunner {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .stdin(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .context("Failed to spawn command")?;
 
         let output = Arc::new(Mutex::new(Vec::new()));
-        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
-
         let stdout = child.stdout.take().expect("Failed to capture stdout");
         let stderr = child.stderr.take().expect("Failed to capture stderr");
+        let (error_tx, error_rx) = mpsc::channel();
 
-        // 创建一个用于存储stderr输出的缓冲区
-        let stderr_buffer = Arc::new(Mutex::new(Vec::new()));
-
-        Self::spawn_reader_thread(
-            stdout,
+        Self::spawn_reader_thread(BufReader::new(stdout), Arc::clone(&output), max_output_size);
+        Self::spawn_error_thread(
+            BufReader::new(stderr),
             Arc::clone(&output),
-            Arc::clone(&running),
             max_output_size,
+            error_tx,
         );
-        Self::spawn_reader_thread(
-            stderr,
-            Arc::clone(&stderr_buffer),
-            Arc::clone(&running),
-            max_output_size,
-        );
-
-        // 等待一小段时间，让命令有机会产生一些输出
-        thread::sleep(Duration::from_millis(100));
-
-        // 检查stderr是否有输出
-        let stderr_output = stderr_buffer.lock().unwrap();
-        if !stderr_output.is_empty() {
-            let error_message = stderr_output.join("\n");
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Command produced error output: {}", error_message),
-            ));
-        }
 
         Ok(CommandRunner {
-            child: Some(child),
+            child,
             output,
-            running,
+            error_rx,
         })
     }
 
-    fn spawn_reader_thread<R: io::Read + Send + 'static>(
+    fn spawn_reader_thread<R: 'static + Send + BufRead>(
         reader: R,
         output: Arc<Mutex<Vec<String>>>,
-        running: Arc<std::sync::atomic::AtomicBool>,
         max_output_size: usize,
     ) {
         thread::spawn(move || {
-            let mut reader = BufReader::new(reader);
+            let mut reader = reader;
             let mut buffer = Vec::new();
             loop {
-                if !running.load(std::sync::atomic::Ordering::SeqCst) {
-                    break;
-                }
-
                 buffer.clear();
                 match reader.read_until(b'\n', &mut buffer) {
                     Ok(0) => break, // EOF
@@ -109,52 +85,80 @@ impl CommandRunner {
         });
     }
 
+    fn spawn_error_thread<R: 'static + Send + BufRead>(
+        reader: R,
+        output: Arc<Mutex<Vec<String>>>,
+        max_output_size: usize,
+        error_tx: mpsc::Sender<String>,
+    ) {
+        thread::spawn(move || {
+            let mut reader = reader;
+            let mut buffer = Vec::new();
+            loop {
+                buffer.clear();
+                match reader.read_until(b'\n', &mut buffer) {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        let (decoded, _, _) = GB18030.decode(&buffer);
+                        let line = decoded.trim_end().to_string();
+                        if !line.is_empty() {
+                            let mut output = output.lock().unwrap();
+                            if output.len() < max_output_size {
+                                output.push(line.clone());
+                                let _ = error_tx.send(line);
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
     pub fn get_output(&self) -> Option<String> {
         let mut output = self.output.lock().unwrap();
         output.pop()
     }
 
     pub fn get_status(&mut self) -> CommandStatus {
-        if let Some(child) = &mut self.child {
-            match child.try_wait() {
-                Ok(Some(_)) => {
-                    self.running
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                    CommandStatus::Terminated
-                }
-                Ok(None) => CommandStatus::Running,
-                Err(_) => {
-                    self.running
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                    CommandStatus::Terminated
+        match self.child.try_wait() {
+            // 子进程已经退出，返回 Some(status)
+            Ok(Some(_)) => {
+                CommandStatus::RunOver // 返回命令已结束状态
+            }
+            // 子进程仍在运行，返回 None
+            Ok(None) => {
+                // 添加短暂的等待时间，确保错误消息有时间被接收
+                thread::sleep(Duration::from_millis(100));
+                // 尝试接收错误消息
+                if let Ok(error) = self.error_rx.try_recv() {
+                    eprintln!("Command error: {}", error);
+                    CommandStatus::ErrTerminated // 返回命令错误终止状态
+                } else {
+                    CommandStatus::Running // 返回命令正在运行状态
                 }
             }
-        } else {
-            CommandStatus::Terminated
+            // 尝试等待子进程状态时发生错误
+            Err(e) => {
+                panic!("Failed to wait for child process: {}", e); // 直接 panic 并输出错误信息
+            }
         }
     }
 
-    pub fn terminate(&mut self) -> io::Result<CommandStatus> {
-        if let Some(child) = &mut self.child {
-            child.kill()?;
-            self.running
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            child.wait()?;
-            Ok(CommandStatus::Terminated)
-        } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "No running command to terminate",
-            ))
-        }
+    pub fn terminate(&mut self) -> Result<CommandStatus> {
+        self.child.kill().context("Failed to kill child process")?;
+        self.child
+            .wait()
+            .context("Failed to wait for child process")?;
+        Ok(CommandStatus::RunOver)
     }
 
-    pub fn provide_input(&mut self, input: &str) -> io::Result<()> {
-        if let Some(child) = &mut self.child {
-            if let Some(stdin) = &mut child.stdin {
-                stdin.write_all(input.as_bytes())?;
-                stdin.flush()?;
-            }
+    pub fn provide_input(&mut self, input: &str) -> Result<()> {
+        if let Some(stdin) = &mut self.child.stdin {
+            stdin
+                .write_all(input.as_bytes())
+                .context("Failed to write to stdin")?;
+            stdin.flush().context("Failed to flush stdin")?;
         }
         Ok(())
     }
@@ -163,6 +167,7 @@ impl CommandRunner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::thread;
     use std::time::Duration;
 
     #[test]
@@ -175,8 +180,7 @@ mod tests {
         let ping_num = 2;
         let ping_command = format!("ping {} {} google.com", ping_count_option, ping_num);
         let mut runner =
-            CommandRunner::new(&ping_command, 10000).expect("Failed to create CommandRunner");
-
+            CommandRunner::run(&ping_command, 10000).expect("Failed to create CommandRunner");
         let mut output_count = 0;
         loop {
             if let Some(output) = runner.get_output() {
@@ -185,27 +189,26 @@ mod tests {
                 output_count += 1;
             }
             let status = runner.get_status();
-            if status == CommandStatus::Terminated {
+            assert!(status != CommandStatus::ErrTerminated);
+            if status == CommandStatus::RunOver {
                 break;
             }
             thread::sleep(Duration::from_millis(500));
         }
-
         assert!(
             output_count >= ping_num,
             "Only received {output_count} outputs"
         );
-        assert_eq!(runner.get_status(), CommandStatus::Terminated);
+        assert_eq!(runner.get_status(), CommandStatus::RunOver);
     }
 
     #[test]
     fn test_panic_command() {
         // valid command
-        let result = CommandRunner::new("echo", 10000);
-        assert!(result.is_ok());
-
+        let mut result = CommandRunner::run("echo", 10000).unwrap();
+        assert_eq!(result.get_status(), CommandStatus::Running);
         // err command
-        let result = CommandRunner::new("nonexistent_command", 10000);
-        assert!(result.is_err());
+        let mut result = CommandRunner::run("nonexistent_command", 10000).unwrap();
+        assert_eq!(result.get_status(), CommandStatus::ErrTerminated);
     }
 }

@@ -1,6 +1,8 @@
 mod test;
+use encoding_rs::GB18030;
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
+
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -44,22 +46,21 @@ impl CommandExecutor {
     }
 
     async fn read_stream(
-        stream: impl tokio::io::AsyncRead + Unpin,
+        mut stream: impl tokio::io::AsyncRead + Unpin,
         sender: mpsc::UnboundedSender<String>,
     ) {
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
+        let mut buffer = [0u8; 128];
 
         loop {
-            match reader.read_line(&mut line).await {
-                Ok(0) => break, // EOF
-                Ok(_) => {
-                    if sender.send(line.trim().to_string()).is_err() {
+            match stream.read(&mut buffer).await {
+                Ok(0) | Err(_) => break, // EOF or error
+                Ok(n) => {
+                    let (decoded, _, _) = GB18030.decode(&buffer[..n]);
+                    let line = decoded.into_owned();
+                    if sender.send(line).is_err() {
                         break;
                     }
-                    line.clear();
                 }
-                Err(_) => break,
             }
         }
     }

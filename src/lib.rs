@@ -5,7 +5,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 mod test;
 
-const TERMINATE_COMMAND: &str = "__TERMINATE_ONLY_FOR_CRATE_COMMAND_RUNNER__";
+const TERMINATE_COMMAND: &str = "__TERMINATE_COMMAND_ONLY_FOR_CRATE_COMMAND_RUNNER__";
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {

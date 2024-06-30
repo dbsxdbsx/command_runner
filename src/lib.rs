@@ -12,14 +12,14 @@ pub enum CommandStatus {
 
 pub struct CommandExecutor {
     child: tokio::process::Child,
-    output_receiver: mpsc::Receiver<String>,
-    error_receiver: mpsc::Receiver<String>,
+    output_receiver: mpsc::UnboundedReceiver<String>,
+    error_receiver: mpsc::UnboundedReceiver<String>,
 }
 
 impl CommandExecutor {
     pub async fn new(command: &str, args: &[&str]) -> Result<Self, std::io::Error> {
-        let (output_sender, output_receiver) = mpsc::channel(100);
-        let (error_sender, error_receiver) = mpsc::channel(100);
+        let (output_sender, output_receiver) = mpsc::unbounded_channel();
+        let (error_sender, error_receiver) = mpsc::unbounded_channel();
 
         let mut child = Command::new(command)
             .args(args)
@@ -40,11 +40,14 @@ impl CommandExecutor {
         })
     }
 
-    async fn read_stream(stream: impl tokio::io::AsyncRead + Unpin, sender: mpsc::Sender<String>) {
+    async fn read_stream(
+        stream: impl tokio::io::AsyncRead + Unpin,
+        sender: mpsc::UnboundedSender<String>,
+    ) {
         let mut reader = BufReader::new(stream).lines();
 
         while let Some(line) = reader.next_line().await.unwrap() {
-            if sender.send(line).await.is_err() {
+            if sender.send(line).is_err() {
                 break;
             }
         }
@@ -98,11 +101,12 @@ mod tests {
             "-c"
         };
 
-        let start_time = Instant::now();
-        let timeout = Duration::from_secs(10);
         let mut executor = CommandExecutor::new("ping", &[ping_count_option, "2", "google.com"])
             .await
             .unwrap();
+
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs(2);
         loop {
             match executor.get_status().await {
                 CommandStatus::Running => {
@@ -125,6 +129,7 @@ mod tests {
                         for line in error {
                             println!("{}", line);
                         }
+                        panic!("There should not be error in this test case!")
                     }
                 }
                 CommandStatus::RunOver => {

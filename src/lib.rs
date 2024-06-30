@@ -1,5 +1,5 @@
 use std::process::Stdio;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use tokio::sync::mpsc;
 
@@ -41,15 +41,33 @@ impl CommandExecutor {
     }
 
     async fn read_stream(
-        stream: impl tokio::io::AsyncRead + Unpin,
+        mut stream: impl tokio::io::AsyncRead + Unpin,
         sender: mpsc::UnboundedSender<String>,
     ) {
-        let mut reader = BufReader::new(stream).lines();
+        let mut buffer = Vec::new();
+        let mut temp_buffer = [0u8; 1024];
 
-        while let Some(line) = reader.next_line().await.unwrap() {
-            if sender.send(line).is_err() {
-                break;
+        loop {
+            match stream.read(&mut temp_buffer).await {
+                Ok(0) => break, // EOF
+                Ok(n) => {
+                    buffer.extend_from_slice(&temp_buffer[..n]);
+                    while let Some(i) = buffer.iter().position(|&x| x == b'\n') {
+                        let line = String::from_utf8_lossy(&buffer[..i]).to_string();
+                        if sender.send(line).is_err() {
+                            return;
+                        }
+                        buffer = buffer.split_off(i + 1);
+                    }
+                }
+                Err(_) => break,
             }
+        }
+
+        // 发送剩余的缓冲区内容(如果有的话)
+        if !buffer.is_empty() {
+            let line = String::from_utf8_lossy(&buffer).to_string();
+            let _ = sender.send(line);
         }
     }
 

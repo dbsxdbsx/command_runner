@@ -4,7 +4,7 @@
 
 ## TODO
 
-- Add status `WaitInputDuringRunning`
+- Add status `WaitInputDuringRunning`(有bak代码)
 - Test with guessing game(Rust/python script)
 - Fix no output for `ping`
 

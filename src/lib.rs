@@ -29,7 +29,7 @@ impl CommandRunner {
         let (input_sender, input_receiver) = unbounded();
 
         // Split commands and arguments
-        let parts: Vec<&str> = command.split_whitespace().collect();
+        let parts: Vec<&str> = command.trim().split_whitespace().collect();
         let (cmd, args) = if parts.len() > 1 {
             (parts[0], &parts[1..])
         } else {

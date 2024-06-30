@@ -99,7 +99,7 @@ mod tests {
             "-c"
         };
 
-        let mut executor = CommandExecutor::new("ping", &[ping_count_option, "2", "google.com"])
+        let mut executor = CommandExecutor::new("ping", &[ping_count_option, "1", "google.com"])
             .await
             .unwrap();
 

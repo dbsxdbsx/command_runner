@@ -110,7 +110,7 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_command_executor() {
+    async fn test_os_built_in_command() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {

@@ -6,8 +6,8 @@ use tokio::sync::mpsc;
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
     Running,
-    RunOver,
-    ErrTerminated,
+    Finished,
+    Panic,
 }
 
 pub struct CommandExecutor {
@@ -57,15 +57,15 @@ impl CommandExecutor {
         match self.child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
-                    CommandStatus::RunOver
+                    CommandStatus::Finished
                 } else {
-                    CommandStatus::ErrTerminated
+                    CommandStatus::Panic
                 }
             }
             Ok(None) => CommandStatus::Running,
             Err(e) => {
                 eprintln!("Failed to wait for child process: {}", e);
-                CommandStatus::ErrTerminated
+                CommandStatus::Panic
             }
         }
     }
@@ -132,11 +132,11 @@ mod tests {
                         panic!("There should not be error in this test case!")
                     }
                 }
-                CommandStatus::RunOver => {
+                CommandStatus::Finished => {
                     println!("Command completed successfully");
                     break;
                 }
-                CommandStatus::ErrTerminated => {
+                CommandStatus::Panic => {
                     panic!("Command terminated with error");
                 }
             }

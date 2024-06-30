@@ -11,11 +11,9 @@ mod tests {
         };
 
         let check_num = 2;
-        let mut executor = CommandRunner::run(
-            "ping",
-            &[ping_count_option, &check_num.to_string(), "google.com"],
-        )
-        .unwrap();
+        let mut executor =
+            CommandRunner::run(&format!("ping {ping_count_option} {check_num} google.com"))
+                .unwrap();
 
         let mut output_count = 0;
         loop {
@@ -60,7 +58,7 @@ mod tests {
 
     #[test]
     fn test_customized_app_command() {
-        let mut executor = CommandRunner::run("./customized_app", &[]).unwrap();
+        let mut executor = CommandRunner::run("./customized_app").unwrap();
 
         let mut all_output = Vec::new();
         loop {
@@ -99,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_invalid_command() {
-        let result = CommandRunner::run("non_existent_command", &[]);
+        let result = CommandRunner::run("non_existent_command");
         assert!(result.is_err(), "Expected an error for invalid command");
     }
 
@@ -108,14 +106,10 @@ mod tests {
     #[test]
     fn test_terminate() {
         // Create a command that outputs continuously
-        #[cfg(unix)]
-        let (command, args) = ("yes", vec["test"]);
-        #[cfg(windows)]
-        let (command, args) = ("ping", vec!["-t", "127.0.0.1"]);
+        let command = "ping -t 127.0.0.1";
 
         // Create a CommandExecutor instance
-        let mut executor =
-            CommandRunner::run(command, &args).expect("Failed to create CommandExecutor");
+        let mut executor = CommandRunner::run(command).expect("Failed to create CommandExecutor");
 
         // Wait for a short time to ensure the command starts executing
         std::thread::sleep(Duration::from_millis(100));

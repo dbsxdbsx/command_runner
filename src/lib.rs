@@ -1,21 +1,8 @@
-use anyhow::{Context, Result};
-use encoding_rs::GB18030;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
-
-pub trait OutputExt {
-    fn to_str(&self) -> Result<String>;
-}
-impl OutputExt for Vec<u8> {
-    fn to_str(&self) -> Result<String> {
-        let (decoded, _, _) = GB18030.decode(self);
-        Ok(decoded.to_string())
-    }
-}
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
@@ -24,180 +11,132 @@ pub enum CommandStatus {
     ErrTerminated,
 }
 
-pub struct CommandRunner {
-    child: std::process::Child,
-    output: Arc<Mutex<Vec<u8>>>,
-    error_rx: mpsc::Receiver<String>,
+/// CommandExecutor 结构体，用于执行命令行指令并处理输出和输入
+pub struct CommandExecutor {
+    output: Arc<Mutex<String>>,
+    sender: Sender<String>,
 }
 
-impl CommandRunner {
-    pub fn run(command: &str) -> Result<Self> {
-        let (cmd_exe, param1) = if cfg!(target_os = "windows") {
-            ("cmd", "/C")
-        } else {
-            ("sh", "-c")
-        };
+impl Default for CommandExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
-        let mut child = Command::new(cmd_exe)
-            .arg(param1)
-            .arg(command)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::piped())
-            .spawn()
-            .context("Failed to spawn command")?;
+impl CommandExecutor {
+    /// 创建一个新的 CommandExecutor 实例
+    pub fn new() -> Self {
+        let (sender, receiver) = mpsc::channel::<String>();
+        let output = Arc::new(Mutex::new(String::new()));
 
-        let output = Arc::new(Mutex::new(Vec::new()));
-        let stdout = child.stdout.take().expect("Failed to capture stdout");
-        let stderr = child.stderr.take().expect("Failed to capture stderr");
-        let (error_tx, error_rx) = mpsc::channel();
+        // 启动一个线程来处理输出
+        let output_clone = Arc::clone(&output);
+        thread::spawn(move || {
+            while let Ok(line) = receiver.recv() {
+                let mut output = output_clone.lock().unwrap();
+                output.push_str(&line);
+                output.push('\n');
+            }
+        });
 
-        Self::spawn_io_thread(
-            BufReader::new(stdout),
-            BufReader::new(stderr),
-            Arc::clone(&output),
-            error_tx,
-        );
-
-        Ok(CommandRunner {
-            child,
-            output,
-            error_rx,
-        })
+        CommandExecutor { output, sender }
     }
 
-    fn spawn_io_thread<STDOUT: 'static + Send + BufRead, STDERR: 'static + Send + BufRead>(
-        mut stdout_reader: STDOUT,
-        mut stderr_reader: STDERR,
-        output: Arc<Mutex<Vec<u8>>>,
-        error_tx: mpsc::Sender<String>,
-    ) {
+    /// 执行命令行指令
+    pub fn execute_command(&self, command: &str, args: &[&str]) -> io::Result<()> {
+        let mut cmd = Command::new(command);
+        cmd.args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::piped());
+
+        let mut child = cmd.spawn()?;
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+
+        let sender_clone = self.sender.clone();
+
+        // 处理标准输出
         thread::spawn(move || {
-            let mut stdout_buffer = Vec::new();
-            let mut stderr_buffer = Vec::new();
-
-            loop {
-                stdout_buffer.clear();
-                stderr_buffer.clear();
-
-                let stdout_result = stdout_reader.read_until(b'\n', &mut stdout_buffer);
-                if let Ok(bytes_read) = stdout_result {
-                    if bytes_read > 0 {
-                        let mut output = output.lock().unwrap();
-                        output.extend_from_slice(&stdout_buffer);
-                    }
-                }
-
-                let stderr_result = stderr_reader.read_until(b'\n', &mut stderr_buffer);
-                if let Ok(bytes_read) = stderr_result {
-                    if bytes_read > 0 {
-                        let mut output = output.lock().unwrap();
-                        output.extend_from_slice(&stderr_buffer);
-                        let line = String::from_utf8_lossy(&stderr_buffer).to_string();
-                        let _ = error_tx.send(line);
-                    }
-                }
-
-                if stdout_result.is_err() && stderr_result.is_err() {
-                    break;
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    sender_clone.send(line).unwrap();
                 }
             }
         });
-    }
 
-    pub fn get_output(&self) -> Option<Vec<u8>> {
-        let mut output = self.output.lock().unwrap();
-        if !output.is_empty() {
-            Some(output.split_off(0))
-        } else {
-            None
-        }
-    }
-
-    pub fn get_status(&mut self) -> CommandStatus {
-        match self.child.try_wait() {
-            Ok(Some(_)) => CommandStatus::RunOver,
-            Ok(None) => {
-                thread::sleep(Duration::from_millis(100));
-                if let Ok(error) = self.error_rx.try_recv() {
-                    eprintln!("Command error: {}", error);
-                    CommandStatus::ErrTerminated
-                } else {
-                    CommandStatus::Running
+        // 处理标准错误
+        let sender_clone = self.sender.clone();
+        thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines() {
+                if let Ok(line) = line {
+                    sender_clone.send(line).unwrap();
                 }
             }
-            Err(e) => {
-                panic!("Failed to wait for child process: {}", e);
-            }
-        }
-    }
+        });
 
-    pub fn terminate(&mut self) -> Result<CommandStatus> {
-        self.child.kill().context("Failed to kill child process")?;
-        self.child
-            .wait()
-            .context("Failed to wait for child process")?;
-        Ok(CommandStatus::RunOver)
-    }
+        // 处理用户输入
+        thread::spawn(move || {
+            let mut input = String::new();
+            io::stdin().read_line(&mut input).unwrap();
+            stdin.write_all(input.as_bytes()).unwrap();
+        });
 
-    pub fn provide_input(&mut self, input: &str) -> Result<()> {
-        if let Some(stdin) = &mut self.child.stdin {
-            stdin
-                .write_all(input.as_bytes())
-                .context("Failed to write to stdin")?;
-            stdin.flush().context("Failed to flush stdin")?;
-        }
         Ok(())
+    }
+
+    /// 获取当前的输出
+    pub fn get_output(&self) -> String {
+        let output = self.output.lock().unwrap();
+        output.clone()
     }
 }
 
 #[cfg(test)]
-mod tests {
+mod test {
     use super::*;
-    use std::thread;
     use std::time::Duration;
 
     #[test]
-    fn test_valid_command() {
-        let mut result = CommandRunner::run("echo").unwrap();
-        assert_eq!(result.get_status(), CommandStatus::Running);
-    }
+    fn test_basic() {
+        let executor = CommandExecutor::new();
+        let command = "ping";
+        let args = ["-c", "2", "google.com"];
 
-    #[test]
-    fn test_invalid_command() {
-        let mut result = CommandRunner::run("invalid_command").unwrap();
-        assert_eq!(result.get_status(), CommandStatus::ErrTerminated);
-    }
+        match executor.execute_command(command, &args) {
+            Ok(_) => {
+                let mut output = String::new();
+                let start_time = std::time::Instant::now();
+                let timeout = Duration::from_secs(10); // 设置10秒超时
 
-    #[test]
-    fn test_command_feedback() {
-        let ping_count_option = if cfg!(target_os = "windows") {
-            "-n"
-        } else {
-            "-c"
-        };
-        let ping_num = 2;
-        let ping_command = format!("ping {} {} google.com", ping_count_option, ping_num);
-        let mut runner = CommandRunner::run(&ping_command).expect("Failed to create CommandRunner");
-        let mut output_count = 0;
-        loop {
-            if let Some(output) = runner.get_output() {
-                let output_str = output.to_str().expect("Failed to convert output to string");
-                println!("Got terminal Output:\n{}", output_str);
-                assert!(!output_str.trim().is_empty());
-                output_count += 1;
+                while start_time.elapsed() < timeout {
+                    let current_output = executor.get_output();
+                    if current_output != output {
+                        output = current_output;
+                        println!("Current Output:\n{}", output);
+                    }
+
+                    match executor.get_status() {
+                        CommandStatus::RunOver => break,
+                        CommandStatus::ErrTerminated => {
+                            panic!("Command terminated with error");
+                        }
+                        CommandStatus::Running => {
+                            std::thread::sleep(Duration::from_millis(100));
+                        }
+                    }
+                }
+
+                assert!(!output.is_empty(), "Command output should not be empty");
+                assert_eq!(executor.get_status(), CommandStatus::RunOver, "Command should be completed");
             }
-            let status = runner.get_status();
-            assert!(status != CommandStatus::ErrTerminated);
-            if status == CommandStatus::RunOver {
-                break;
+            Err(e) => {
+                eprintln!("Failed to execute command: {}", e);
+                panic!("Command execution failed");
             }
-            thread::sleep(Duration::from_millis(500));
         }
-        assert!(
-            output_count >= ping_num,
-            "Only received {output_count} outputs"
-        );
-        assert_eq!(runner.get_status(), CommandStatus::RunOver);
     }
 }

@@ -26,8 +26,8 @@
 [dependencies]
     anyhow     ="1"
     encoding_rs="0.8"
-    # crossbeam-channel = "0.5.13"
-    tokio = { version = "1", features = ["full"] }
+    crossbeam  ="0.8"
+    # tokio      ={version="1", features=["full"]}
     # thiserror="1"
 
 [dev-dependencies]

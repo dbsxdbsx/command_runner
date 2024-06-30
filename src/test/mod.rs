@@ -10,14 +10,20 @@ mod tests {
             "-c"
         };
 
-        let mut executor =
-            CommandRunner::run("ping", &[ping_count_option, "3", "google.com"]).unwrap();
+        let check_num = 2;
+        let mut executor = CommandRunner::run(
+            "ping",
+            &[ping_count_option, &check_num.to_string(), "google.com"],
+        )
+        .unwrap();
 
+        let mut output_count = 0;
         loop {
             match executor.get_status() {
                 CommandStatus::Running => {
                     let output = executor.get_output();
                     if !output.is_empty() {
+                        output_count += output.len();
                         println!("Current Output:");
                         for line in output {
                             println!("{}", line);
@@ -42,6 +48,14 @@ mod tests {
                 }
             }
         }
+
+        assert!(
+            output_count > check_num,
+            "Expected output count to be greater than {}, but got {}",
+            check_num,
+            output_count
+        );
+        println!("Total output lines: {}", output_count);
     }
 
     #[test]

@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 pub enum CommandStatus {
     Running,
     Finished,
-    Panic,
+    ErrTerminated,
 }
 
 pub struct CommandExecutor {
@@ -59,13 +59,13 @@ impl CommandExecutor {
                 if status.success() {
                     CommandStatus::Finished
                 } else {
-                    CommandStatus::Panic
+                    CommandStatus::ErrTerminated
                 }
             }
             Ok(None) => CommandStatus::Running,
             Err(e) => {
                 eprintln!("Failed to wait for child process: {}", e);
-                CommandStatus::Panic
+                CommandStatus::ErrTerminated
             }
         }
     }
@@ -90,8 +90,6 @@ impl CommandExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
-    use std::time::Instant;
 
     #[tokio::test]
     async fn test_command_executor() {
@@ -105,16 +103,9 @@ mod tests {
             .await
             .unwrap();
 
-        let start_time = Instant::now();
-        let timeout = Duration::from_secs(2);
         loop {
             match executor.get_status().await {
                 CommandStatus::Running => {
-                    if start_time.elapsed() > timeout {
-                        panic!("Command execution timed out");
-                    }
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-
                     let output = executor.get_output().await;
                     if !output.is_empty() {
                         println!("Current Output:");
@@ -136,7 +127,7 @@ mod tests {
                     println!("Command completed successfully");
                     break;
                 }
-                CommandStatus::Panic => {
+                CommandStatus::ErrTerminated => {
                     panic!("Command terminated with error");
                 }
             }

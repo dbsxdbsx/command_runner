@@ -28,7 +28,7 @@ impl CommandRunner {
         let (error_sender, error_receiver) = unbounded();
         let (input_sender, input_receiver) = unbounded();
 
-        // 拆分命令和参数
+        // Split commands and arguments
         let parts: Vec<&str> = command.split_whitespace().collect();
         let (cmd, args) = if parts.len() > 1 {
             (parts[0], &parts[1..])
@@ -92,14 +92,14 @@ impl CommandRunner {
     }
 
     pub fn terminate(&mut self) {
-        // 发送特殊终止信号以确保输入线程能够正确退出
+        // Send a special termination signal to ensure the input thread can exit correctly
         let _ = self.input_sender.send(TERMINATE_COMMAND.to_string());
 
-        // 尝试终止子进程
+        // Attempt to terminate the child process
         let _ = self.child.kill();
         let _ = self.child.wait();
 
-        // 等待所有流处理线程完成
+        // Wait for all stream handling threads to complete
         for handle in self.thread_handles.drain(..) {
             if let Err(e) = handle.join() {
                 eprintln!("Error joining thread: {:?}", e);

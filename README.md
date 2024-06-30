@@ -2,6 +2,12 @@
 
 `command_runner` is a cross-platform Rust crate designed for executing terminal commands interactively. It wraps various features in a struct to provide a seamless command execution experience.
 
+## TODO
+
+- Add status `WaitInputDuringRunning`
+- Test with guessing game(Rust/python script)
+- Fix no output for `ping`
+
 ## Key Features
 
 1. **Execute Command Line Instructions**: Run any command line instruction from within your Rust application.

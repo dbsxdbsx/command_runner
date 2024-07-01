@@ -3,7 +3,7 @@ mod tests {
     use crate::*;
 
     #[test]
-    fn test_os_built_in_command() {
+    fn test_command_of_ping() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {
@@ -95,7 +95,13 @@ mod tests {
         );
 
         for (i, line) in all_output.iter().enumerate() {
-            assert_eq!(line.trim(), &(i+1).to_string(), "Line {} should be '{}'", i + 1, i + 1);
+            assert_eq!(
+                line.trim(),
+                &(i + 1).to_string(),
+                "Line {} should be '{}'",
+                i + 1,
+                i + 1
+            );
         }
     }
 
@@ -108,7 +114,7 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn test_terminate() {
+    fn test_force_terminate_command() {
         // Create a command that outputs continuously
         let command = "ping -t 127.0.0.1";
 

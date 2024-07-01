@@ -3,7 +3,7 @@ mod test;
 use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use encoding_rs::GB18030;
 use mio::{Events, Interest, Poll, Token};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

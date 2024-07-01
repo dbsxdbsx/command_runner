@@ -41,6 +41,9 @@ mod tests {
                     println!("Built-in Command completed successfully");
                     break;
                 }
+                CommandStatus::WaitingForInput => {
+                    panic!("There should not be `WaitingForInput` status")
+                }
                 CommandStatus::ExceptionTerminated => {
                     panic!("Built-in Command terminated with error");
                 }
@@ -57,8 +60,8 @@ mod tests {
     }
 
     #[test]
-    fn test_customized_app_command() {
-        let mut executor = CommandRunner::run("./customized_app").unwrap();
+    fn test_receiving_output_by_python_script_print_3_lines() {
+        let mut executor = CommandRunner::run("python ./tests/print_3_lines.py").unwrap();
 
         let mut all_output = Vec::new();
         loop {
@@ -75,6 +78,9 @@ mod tests {
                     println!("Custom application command execution completed");
                     break;
                 }
+                CommandStatus::WaitingForInput => {
+                    panic!("There should not be `WaitingForInput` status")
+                }
                 CommandStatus::ExceptionTerminated => {
                     panic!("Custom application command execution error");
                 }
@@ -87,12 +93,6 @@ mod tests {
             "Expected output should have 3 lines, but got {} lines",
             all_output.len()
         );
-
-        // Print the collected output for debugging
-        println!("collected output:");
-        for (i, line) in all_output.iter().enumerate() {
-            println!("line-{}: {}", i + 1, line);
-        }
     }
 
     #[test]
@@ -147,5 +147,51 @@ mod tests {
             executor.thread_handles.is_empty(),
             "All threads should have been joined"
         );
+    }
+
+    #[test]
+    fn test_input_and_output_by_python_script_guessing_game() {
+        let mut executor = CommandRunner::run("python ./tests/guessing_game.py").unwrap();
+
+        let mut all_output = Vec::new();
+        let mut min = 1;
+        let mut max = 100;
+        let mut guess = 50;
+
+        loop {
+            match executor.get_status() {
+                CommandStatus::Running => {
+                    let output = executor.get_output();
+                    println!("the output is:{output:?}");
+                    all_output.extend(output.clone());
+
+                    for line in output {
+                        println!("Output: {}", line);
+                        if line.contains("Too small!") {
+                            min = guess + 1;
+                        } else if line.contains("Too big!") {
+                            max = guess - 1;
+                        } else if line.contains("You win!") {
+                            println!("游戏胜利!");
+                            return;
+                        }
+                    }
+
+                    let error = executor.get_error();
+                    assert!(error.is_empty(), "意外的错误输出: {:?}", error);
+                }
+                CommandStatus::WaitingForInput => {
+                    guess = (min + max) / 2;
+                    executor.input(&guess.to_string()).unwrap();
+                    println!("输入: {}", guess);
+                }
+                CommandStatus::Finished => {
+                    panic!("游戏意外结束,没有胜利");
+                }
+                CommandStatus::ExceptionTerminated => {
+                    panic!("游戏异常终止");
+                }
+            }
+        }
     }
 }

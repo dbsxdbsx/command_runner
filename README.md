@@ -6,6 +6,8 @@
 
 - Add status `WaitInputDuringRunning`(有bak代码)
 - Test with guessing game(Rust/python script)
+- change result to anyhow
+- get_status ... have to be mut?
 - Fix no output for `ping`
 
 ## Key Features

@@ -27,6 +27,8 @@
     anyhow     ="1"
     encoding_rs="0.8"
     crossbeam  ="0.8"
+
+    mio={version="1", features=["os-ext"]}
     # tokio      ={version="1", features=["full"]}
     # thiserror="1"
 

@@ -1,16 +1,30 @@
+mod test;
+
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use encoding_rs::GB18030;
+use mio::{Events, Interest, Poll, Token};
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
-mod test;
 
+#[cfg(any(unix, target_os = "android"))]
+use mio::unix::SourceFd;
+#[cfg(any(unix, target_os = "android"))]
+use std::os::unix::io::AsRawFd;
+
+#[cfg(windows)]
+use mio::windows::NamedPipe;
+#[cfg(windows)]
+use std::os::windows::io::{AsRawHandle, FromRawHandle};
+
+const STDIN: Token = Token(0);
 const TERMINATE_COMMAND: &str = "__TERMINATE_COMMAND_ONLY_FOR_CRATE_COMMAND_RUNNER__";
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
     Running,
     Finished,
+    WaitingForInput,
     ExceptionTerminated,
 }
 
@@ -20,6 +34,7 @@ pub struct CommandRunner {
     error_receiver: Receiver<String>,
     input_sender: Sender<String>,
     thread_handles: Vec<JoinHandle<()>>,
+    poll: Poll,
 }
 
 impl CommandRunner {
@@ -28,8 +43,7 @@ impl CommandRunner {
         let (error_sender, error_receiver) = unbounded();
         let (input_sender, input_receiver) = unbounded();
 
-        // Split commands and arguments
-        let parts: Vec<&str> = command.trim().split_whitespace().collect();
+        let parts: Vec<&str> = command.split_whitespace().collect();
         let (cmd, args) = if parts.len() > 1 {
             (parts[0], &parts[1..])
         } else {
@@ -51,12 +65,33 @@ impl CommandRunner {
         let stderr_handle = thread::spawn(move || Self::read_stream(stderr, error_sender));
         let stdin_handle = thread::spawn(move || Self::write_stream(stdin, input_receiver));
 
+        // poll of mio
+        let poll = Poll::new()?;
+        #[cfg(windows)]
+        {
+            if let Some(stdin) = child.stdin.as_ref() {
+                let stdin_handle = stdin.as_raw_handle();
+                let mut pipe = unsafe { NamedPipe::from_raw_handle(stdin_handle) };
+                poll.registry()
+                    .register(&mut pipe, STDIN, Interest::WRITABLE)?;
+            }
+        }
+        #[cfg(any(unix, target_os = "android"))]
+        {
+            if let Some(stdin) = child.stdin.as_ref() {
+                let stdin_fd = stdin.as_raw_fd();
+                poll.registry()
+                    .register(&mut SourceFd(&stdin_fd), STDIN, Interest::WRITABLE)?;
+            }
+        }
+
         Ok(CommandRunner {
             child,
             output_receiver,
             error_receiver,
             input_sender,
             thread_handles: vec![stdout_handle, stderr_handle, stdin_handle],
+            poll,
         })
     }
 
@@ -92,14 +127,10 @@ impl CommandRunner {
     }
 
     pub fn terminate(&mut self) {
-        // Send a special termination signal to ensure the input thread can exit correctly
         let _ = self.input_sender.send(TERMINATE_COMMAND.to_string());
-
-        // Attempt to terminate the child process
         let _ = self.child.kill();
         let _ = self.child.wait();
 
-        // Wait for all stream handling threads to complete
         for handle in self.thread_handles.drain(..) {
             if let Err(e) = handle.join() {
                 eprintln!("Error joining thread: {:?}", e);
@@ -116,8 +147,36 @@ impl CommandRunner {
                     CommandStatus::ExceptionTerminated
                 }
             }
-            Ok(None) => CommandStatus::Running,
+            Ok(None) => {
+                if self.is_ready_for_input() {
+                    CommandStatus::WaitingForInput
+                } else {
+                    CommandStatus::Running
+                }
+            }
             Err(_) => CommandStatus::ExceptionTerminated,
+        }
+    }
+
+    fn is_ready_for_input(&mut self) -> bool {
+        if self.child.stdin.is_none() {
+            return false;
+        }
+
+        let mut events = Events::with_capacity(1);
+        match self
+            .poll
+            .poll(&mut events, Some(std::time::Duration::from_millis(0)))
+        {
+            Ok(_) => {
+                for event in events.iter() {
+                    if event.token() == STDIN && event.is_writable() {
+                        return true;
+                    }
+                }
+                false
+            }
+            Err(_) => false,
         }
     }
 

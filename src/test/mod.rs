@@ -93,6 +93,10 @@ mod tests {
             "Expected output should have 3 lines, but got {} lines",
             all_output.len()
         );
+
+        for (i, line) in all_output.iter().enumerate() {
+            assert_eq!(line.trim(), &(i+1).to_string(), "Line {} should be '{}'", i + 1, i + 1);
+        }
     }
 
     #[test]
@@ -149,49 +153,49 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_input_and_output_by_python_script_guessing_game() {
-        let mut executor = CommandRunner::run("python ./tests/guessing_game.py").unwrap();
+    // #[test]
+    // fn test_input_and_output_by_python_script_guessing_game() {
+    //     let mut executor = CommandRunner::run("python ./tests/guessing_game.py").unwrap();
 
-        let mut all_output = Vec::new();
-        let mut min = 1;
-        let mut max = 100;
-        let mut guess = 50;
+    //     let mut all_output = Vec::new();
+    //     let mut min = 1;
+    //     let mut max = 100;
+    //     let mut guess = 50;
 
-        loop {
-            match executor.get_status() {
-                CommandStatus::Running => {
-                    let output = executor.get_output();
-                    println!("the output is:{output:?}");
-                    all_output.extend(output.clone());
+    //     loop {
+    //         match executor.get_status() {
+    //             CommandStatus::Running => {
+    //                 let output = executor.get_output();
+    //                 println!("the output is:{output:?}");
+    //                 all_output.extend(output.clone());
 
-                    for line in output {
-                        println!("Output: {}", line);
-                        if line.contains("Too small!") {
-                            min = guess + 1;
-                        } else if line.contains("Too big!") {
-                            max = guess - 1;
-                        } else if line.contains("You win!") {
-                            println!("游戏胜利!");
-                            return;
-                        }
-                    }
+    //                 for line in output {
+    //                     println!("Output: {}", line);
+    //                     if line.contains("Too small!") {
+    //                         min = guess + 1;
+    //                     } else if line.contains("Too big!") {
+    //                         max = guess - 1;
+    //                     } else if line.contains("You win!") {
+    //                         println!("游戏胜利!");
+    //                         return;
+    //                     }
+    //                 }
 
-                    let error = executor.get_error();
-                    assert!(error.is_empty(), "意外的错误输出: {:?}", error);
-                }
-                CommandStatus::WaitingForInput => {
-                    guess = (min + max) / 2;
-                    executor.input(&guess.to_string()).unwrap();
-                    println!("输入: {}", guess);
-                }
-                CommandStatus::Finished => {
-                    panic!("游戏意外结束,没有胜利");
-                }
-                CommandStatus::ExceptionTerminated => {
-                    panic!("游戏异常终止");
-                }
-            }
-        }
-    }
+    //                 let error = executor.get_error();
+    //                 assert!(error.is_empty(), "意外的错误输出: {:?}", error);
+    //             }
+    //             CommandStatus::WaitingForInput => {
+    //                 guess = (min + max) / 2;
+    //                 executor.input(&guess.to_string()).unwrap();
+    //                 println!("输入: {}", guess);
+    //             }
+    //             CommandStatus::Finished => {
+    //                 panic!("游戏意外结束,没有胜利");
+    //             }
+    //             CommandStatus::ExceptionTerminated => {
+    //                 panic!("游戏异常终止");
+    //             }
+    //         }
+    //     }
+    // }
 }

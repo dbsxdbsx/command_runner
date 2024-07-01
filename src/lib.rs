@@ -3,7 +3,7 @@ mod test;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use encoding_rs::GB18030;
 use mio::{Events, Interest, Poll, Token};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread::{self, JoinHandle};
 
@@ -96,11 +96,36 @@ impl CommandRunner {
     }
 
     fn read_stream<R: std::io::Read>(stream: R, sender: crossbeam::channel::Sender<String>) {
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                let (decoded, _, _) = GB18030.decode(line.as_bytes());
-                let _ = sender.send(decoded.into_owned());
+        let mut reader = BufReader::new(stream);
+        let mut buffer = [0; 1024];
+        let mut leftover = Vec::new();
+
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => {
+                    // continue;
+                    // 处理剩余数据
+                    //  TODO: refine messy code issue
+                    if !leftover.is_empty() {
+                        let (decoded, _, _) = GB18030.decode(&leftover);
+                        let _ = sender.send(decoded.into_owned());
+                    }
+                    // break;
+                }
+                Ok(n) => {
+                    leftover.extend_from_slice(&buffer[..n]);
+
+                    // find and process complete lines
+                    while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
+                        let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
+                        let (decoded, _, _) = GB18030.decode(&line);
+                        let _ = sender.send(decoded.into_owned());
+                    }
+
+                    // clear after usage
+                    buffer.fill(0);
+                }
+                Err(_) => break,
             }
         }
     }

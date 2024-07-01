@@ -7,7 +7,8 @@
 - Add status `WaitInputDuringRunning`(有bak代码)
 - Test with guessing game(Rust/python script)
 - change result to anyhow
-- get_status ... have to be mut?
+- get_status ... have to be mut?/ output has to be Vec<>?
+- does `get_output` would be consume 1 ele each time after calling?
 - Fix no output for `ping`
 
 ## Key Features

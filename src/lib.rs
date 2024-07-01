@@ -1,11 +1,14 @@
 mod test;
 
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use encoding_rs::GB18030;
 use mio::{Events, Interest, Poll, Token};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 #[cfg(any(unix, target_os = "android"))]
 use mio::unix::SourceFd;
@@ -18,7 +21,6 @@ use mio::windows::NamedPipe;
 use std::os::windows::io::{AsRawHandle, FromRawHandle};
 
 const STDIN: Token = Token(0);
-const TERMINATE_COMMAND: &str = "__TERMINATE_COMMAND_ONLY_FOR_CRATE_COMMAND_RUNNER__";
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
@@ -35,6 +37,7 @@ pub struct CommandRunner {
     input_sender: Sender<String>,
     thread_handles: Vec<JoinHandle<()>>,
     poll: Poll,
+    is_terminated: Arc<AtomicBool>,
 }
 
 impl CommandRunner {
@@ -61,9 +64,23 @@ impl CommandRunner {
         let stdout = child.stdout.take().expect("Failed to capture stdout");
         let stderr = child.stderr.take().expect("Failed to capture stderr");
 
-        let stdout_handle = thread::spawn(move || Self::read_stream(stdout, output_sender));
-        let stderr_handle = thread::spawn(move || Self::read_stream(stderr, error_sender));
-        let stdin_handle = thread::spawn(move || Self::write_stream(stdin, input_receiver));
+        // atomic status flag required to be stored in instance field
+        let is_terminated = Arc::new(AtomicBool::new(false));
+        let is_terminated_clone = Arc::clone(&is_terminated);
+
+        // for std out
+        let stdout_handle =
+            thread::spawn(move || Self::read_stream(stdout, output_sender, is_terminated_clone));
+
+        // for std error
+        let is_terminated_clone = Arc::clone(&is_terminated);
+        let stderr_handle =
+            thread::spawn(move || Self::read_stream(stderr, error_sender, is_terminated_clone));
+
+        // for std input
+        let is_terminated_clone = Arc::clone(&is_terminated);
+        let stdin_handle =
+            thread::spawn(move || Self::write_stream(stdin, input_receiver, is_terminated_clone));
 
         // poll of mio
         let poll = Poll::new()?;
@@ -92,26 +109,24 @@ impl CommandRunner {
             input_sender,
             thread_handles: vec![stdout_handle, stderr_handle, stdin_handle],
             poll,
+            is_terminated,
         })
     }
 
-    fn read_stream<R: std::io::Read>(stream: R, sender: crossbeam::channel::Sender<String>) {
+    fn read_stream<R: std::io::Read>(
+        stream: R,
+        sender: crossbeam::channel::Sender<String>,
+        is_terminated: Arc<AtomicBool>,
+    ) {
         let mut reader = BufReader::new(stream);
         let mut buffer = [0; 1024];
         let mut leftover = Vec::new();
 
-        loop {
+        while !is_terminated.load(Ordering::Relaxed) {
             match reader.read(&mut buffer) {
-                Ok(0) => {
-                    // continue;
-                    // 处理剩余数据
-                    //  TODO: refine messy code issue
-                    if !leftover.is_empty() {
-                        let (decoded, _, _) = GB18030.decode(&leftover);
-                        let _ = sender.send(decoded.into_owned());
-                    }
-                    // break;
-                }
+                // Ok(0) => {
+                //     continue;
+                // }
                 Ok(n) => {
                     leftover.extend_from_slice(&buffer[..n]);
 
@@ -119,10 +134,10 @@ impl CommandRunner {
                     while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
                         let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
                         let (decoded, _, _) = GB18030.decode(&line);
-                        let _ = sender.send(decoded.into_owned());
+                        sender.send(decoded.into_owned()).unwrap();
                     }
 
-                    // clear after usage
+                    // TODO: need? clear after usage
                     buffer.fill(0);
                 }
                 Err(_) => break,
@@ -130,14 +145,21 @@ impl CommandRunner {
         }
     }
 
-    fn write_stream<W: std::io::Write>(mut stream: W, receiver: Receiver<String>) {
-        for input in receiver.iter() {
-            if input == TERMINATE_COMMAND {
-                break;
-            }
-            if let Err(e) = writeln!(stream, "{}", input) {
-                eprintln!("Error writing to stdin: {}", e);
-                break;
+    fn write_stream<W: std::io::Write>(
+        mut stream: W,
+        receiver: Receiver<String>,
+        is_terminated: Arc<AtomicBool>,
+    ) {
+        while !is_terminated.load(Ordering::Relaxed) {
+            match receiver.recv_timeout(Duration::from_millis(100)) {
+                Ok(input) => {
+                    if let Err(e) = writeln!(stream, "{}", input) {
+                        eprintln!("Error writing to stdin: {}", e);
+                        break;
+                    }
+                }
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => break,
             }
         }
     }
@@ -152,14 +174,14 @@ impl CommandRunner {
     }
 
     pub fn terminate(&mut self) {
-        let _ = self.input_sender.send(TERMINATE_COMMAND.to_string());
+        // 设置终止标志
+        self.is_terminated.store(true, Ordering::Relaxed);
+
         let _ = self.child.kill();
         let _ = self.child.wait();
 
         for handle in self.thread_handles.drain(..) {
-            if let Err(e) = handle.join() {
-                eprintln!("Error joining thread: {:?}", e);
-            }
+            handle.join().unwrap()
         }
     }
 

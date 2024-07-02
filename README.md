@@ -3,10 +3,8 @@
 `command_runner` is a cross-platform Rust crate designed for executing terminal commands interactively. It wraps various features in a struct to provide a seamless command execution experience.
 
 ## TODO
-- does `get_output` would be consume 1 ele each time after calling? get_status ... have to be mut?/ output has to be Vec<>?
+- distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
 - no init stdin, but do so when it is for ok for input?
-- force temrinate when catch err output?
-- should std err always exit command? distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
 - let 3 threads be green thread
 - Test with guessing game(Rust/python script)
 - change result to anyhow

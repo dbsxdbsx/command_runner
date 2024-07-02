@@ -131,6 +131,77 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_receiving_error_and_output_by_python_script() {
+        let mut executor = CommandRunner::run("python ./tests/test_error.py").unwrap();
+
+        let mut all_outputs = Vec::new();
+        loop {
+            match executor.get_status() {
+                CommandStatus::Running => {
+                    // Collect standard output and error output
+                    if let Some(output) = executor.get_one_output() {
+                        all_outputs.push(("stdout", output));
+                    }
+                    if let Some(error) = executor.get_one_error() {
+                        all_outputs.push(("stderr", error));
+                    }
+                }
+                CommandStatus::ExitedWithOkStatus => {
+                    println!("Python script execution completed");
+                    break;
+                }
+                CommandStatus::WaitingInput => {
+                    panic!("There should not be a `WaitingForInput` status");
+                }
+                CommandStatus::ExceptionalTerminated => {
+                    panic!("Python script execution error");
+                }
+            }
+        }
+
+        // Check the order and content of the outputs
+        assert_eq!(
+            all_outputs.len(),
+            3,
+            "Expected 3 lines of output, but got {}",
+            all_outputs.len()
+        );
+
+        // Check the first line (error output)
+        assert_eq!(
+            all_outputs[0].0, "stderr",
+            "The first line should be an error output"
+        );
+        assert!(
+            all_outputs[0].1.contains("Error: division by zero"),
+            "Error output should contain 'Error: division by zero', but got: {}",
+            all_outputs[0].1
+        );
+
+        // Check the second line (standard output)
+        assert_eq!(
+            all_outputs[1].0, "stdout",
+            "The second line should be a standard output"
+        );
+        assert_eq!(
+            all_outputs[1].1.trim(),
+            "This is normal output information",
+            "The second line of standard output should be 'This is normal output information'"
+        );
+
+        // Check the third line (standard output)
+        assert_eq!(
+            all_outputs[2].0, "stdout",
+            "The third line should be a standard output"
+        );
+        assert_eq!(
+            all_outputs[2].1.trim(),
+            "The program continues to execute...",
+            "The third line of standard output should be 'The program continues to execute...'"
+        );
+    }
+
     // #[test]
     // fn test_sending_input_when_command_is_inited_by_python_script() {
     //     let mut executor = CommandRunner::run("python ./tests/test_input.py").unwrap();

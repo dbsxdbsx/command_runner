@@ -201,56 +201,56 @@ mod tests {
         );
     }
 
-    // #[test]
-    // fn test_sending_input_when_command_is_inited_by_python_script() {
-    //     let mut executor = CommandRunner::run("python ./tests/test_input.py").unwrap();
+    #[test]
+    fn test_sending_input_when_command_is_inited_by_python_script() {
+        let mut executor = CommandRunner::run("python ./tests/test_input.py").unwrap();
 
-    //     let mut output_count = 0;
-    //     let mut input_sent = false;
+        let mut output_lines = Vec::new();
+        let mut input_sent = false;
 
-    //     loop {
-    //         match executor.get_status() {
-    //             CommandStatus::Inited => {
-    //                 let output = executor.get_output();
-    //                 if !output.is_empty() {
-    //                     output_count += output.len();
-    //                     println!("当前输出:");
-    //                     for line in output {
-    //                         println!("{}", line);
-    //                     }
-    //                 }
+        loop {
+            match executor.get_status() {
+                CommandStatus::Running => {
+                    if let Some(output) = executor.get_one_output() {
+                        output_lines.push(output);
+                    }
+                    if let Some(error) = executor.get_one_error() {
+                        panic!("测试中出现错误: {}", error);
+                    }
+                }
+                CommandStatus::ExitedWithOkStatus => {
+                    break;
+                }
+                CommandStatus::WaitingInput => {
+                    if !input_sent {
+                        executor.input("测试输入的内容").unwrap();
+                        input_sent = true;
+                    }
+                }
+                CommandStatus::ExceptionalTerminated => {
+                    panic!();
+                }
+            }
+        }
 
-    //                 let error = executor.get_error();
-    //                 if !error.is_empty() {
-    //                     println!("当前错误:");
-    //                     for line in error {
-    //                         println!("{}", line);
-    //                     }
-    //                     panic!("此测试用例中不应出现错误!");
-    //                 }
-    //             }
-    //             CommandStatus::Exited => {
-    //                 break;
-    //             }
-    //             CommandStatus::WaitInput => {
-    //                 if !input_sent {
-    //                     executor.input("测试输入的内容").unwrap();
-    //                     input_sent = true;
-    //                 }
-    //             }
-    //             CommandStatus::ExceptionalTerminated => {
-    //                 panic!("Python脚本异常终止");
-    //             }
-    //         }
-    //     }
+        assert_eq!(
+            output_lines.len(),
+            2,
+            "预期输出行数为2，但实际得到 {}",
+            output_lines.len()
+        );
+        assert_eq!(output_lines[0], "please input something: ");
+        assert_eq!(
+            output_lines[1],
+            "you've input: 测试输入的内容. Script finished"
+        );
 
-    //     assert_eq!(
-    //         output_count, 3,
-    //         "预期输出行数为3,但实际得到{}",
-    //         output_count
-    //     );
-    //     println!("总输出行数: {}", output_count);
-    // }
+        println!("测试通过！总输出行数: {}", output_lines.len());
+        println!("输出内容:");
+        for line in output_lines {
+            println!("{}", line);
+        }
+    }
 
     // #[test]
     // fn test_input_and_output_by_python_script_guessing_game() {

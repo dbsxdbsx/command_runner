@@ -76,7 +76,7 @@ mod tests {
                     println!("Built-in Command completed successfully");
                     break;
                 }
-                CommandStatus::WaitInput => {
+                CommandStatus::WaitingInput => {
                     panic!("There should not be `WaitingForInput` status")
                 }
                 CommandStatus::ExceptionalTerminated => {
@@ -113,7 +113,7 @@ mod tests {
                     println!("Custom application command execution completed");
                     break;
                 }
-                CommandStatus::WaitInput => {
+                CommandStatus::WaitingInput => {
                     panic!("There should not be `WaitingForInput` status")
                 }
                 CommandStatus::ExceptionalTerminated => {

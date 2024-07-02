@@ -124,9 +124,6 @@ impl CommandRunner {
 
         while !is_terminated.load(Ordering::Relaxed) {
             match reader.read(&mut buffer) {
-                // Ok(0) => {
-                //     continue;
-                // }
                 Ok(n) => {
                     leftover.extend_from_slice(&buffer[..n]);
 
@@ -136,9 +133,6 @@ impl CommandRunner {
                         let (decoded, _, _) = GB18030.decode(&line);
                         sender.send(decoded.into_owned()).unwrap();
                     }
-
-                    // TODO: need? clear after usage
-                    buffer.fill(0);
                 }
                 Err(_) => break,
             }

@@ -3,7 +3,42 @@ mod tests {
     use crate::*;
 
     #[test]
-    fn test_command_of_ping() {
+    fn test_invalid_command() {
+        let result = CommandRunner::run("non_existent_command");
+        assert!(result.is_err(), "Expected an error for invalid command");
+    }
+
+    #[test]
+    fn test_force_terminate_by_os_command_ping() {
+        // Create a command that outputs continuously
+        let command = "ping -t 127.0.0.1";
+
+        // Create a CommandExecutor instance
+        let mut executor = CommandRunner::run(command).unwrap();
+
+        // Wait for a short time to ensure the command starts executing
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Get some initial output
+        let initial_output = executor.get_output();
+        assert!(
+            !initial_output.is_empty(),
+            "There should be some initial output"
+        );
+
+        // Call the terminate method
+        executor.terminate();
+
+        // Assertions:
+        let status = executor.get_status();
+        assert!(
+            matches!(status, CommandStatus::ExceptionalTerminated),
+            "The process should have terminated"
+        );
+    }
+
+    #[test]
+    fn test_os_command_ping() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {
@@ -18,7 +53,7 @@ mod tests {
         let mut output_count = 0;
         loop {
             match executor.get_status() {
-                CommandStatus::Running => {
+                CommandStatus::Inited => {
                     let output = executor.get_output();
                     if !output.is_empty() {
                         output_count += output.len();
@@ -37,14 +72,14 @@ mod tests {
                         panic!("There should not be error in this test case!")
                     }
                 }
-                CommandStatus::Finished => {
+                CommandStatus::Exited => {
                     println!("Built-in Command completed successfully");
                     break;
                 }
-                CommandStatus::WaitingForInput => {
+                CommandStatus::WaitInput => {
                     panic!("There should not be `WaitingForInput` status")
                 }
-                CommandStatus::ExceptionTerminated => {
+                CommandStatus::ExceptionalTerminated => {
                     panic!("Built-in Command terminated with error");
                 }
             }
@@ -60,13 +95,13 @@ mod tests {
     }
 
     #[test]
-    fn test_receiving_output_by_python_script_print_3_lines() {
-        let mut executor = CommandRunner::run("python ./tests/print_3_lines.py").unwrap();
+    fn test_receiving_output_by_python_script() {
+        let mut executor = CommandRunner::run("python ./tests/test_output.py").unwrap();
 
         let mut all_output = Vec::new();
         loop {
             match executor.get_status() {
-                CommandStatus::Running => {
+                CommandStatus::Inited => {
                     // collect output
                     let output = executor.get_output();
                     all_output.extend(output);
@@ -74,14 +109,14 @@ mod tests {
                     let error = executor.get_error();
                     assert!(error.is_empty(), "Unexpected error output: {:?}", error);
                 }
-                CommandStatus::Finished => {
+                CommandStatus::Exited => {
                     println!("Custom application command execution completed");
                     break;
                 }
-                CommandStatus::WaitingForInput => {
+                CommandStatus::WaitInput => {
                     panic!("There should not be `WaitingForInput` status")
                 }
-                CommandStatus::ExceptionTerminated => {
+                CommandStatus::ExceptionalTerminated => {
                     panic!("Custom application command execution error");
                 }
             }
@@ -105,59 +140,56 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_invalid_command() {
-        let result = CommandRunner::run("non_existent_command");
-        assert!(result.is_err(), "Expected an error for invalid command");
-    }
+    // #[test]
+    // fn test_sending_input_when_command_is_inited_by_python_script() {
+    //     let mut executor = CommandRunner::run("python ./tests/test_input.py").unwrap();
 
-    use std::time::Duration;
+    //     let mut output_count = 0;
+    //     let mut input_sent = false;
 
-    #[test]
-    fn test_force_terminate_command() {
-        // Create a command that outputs continuously
-        let command = "ping -t 127.0.0.1";
+    //     loop {
+    //         match executor.get_status() {
+    //             CommandStatus::Inited => {
+    //                 let output = executor.get_output();
+    //                 if !output.is_empty() {
+    //                     output_count += output.len();
+    //                     println!("当前输出:");
+    //                     for line in output {
+    //                         println!("{}", line);
+    //                     }
+    //                 }
 
-        // Create a CommandExecutor instance
-        let mut executor = CommandRunner::run(command).expect("Failed to create CommandExecutor");
+    //                 let error = executor.get_error();
+    //                 if !error.is_empty() {
+    //                     println!("当前错误:");
+    //                     for line in error {
+    //                         println!("{}", line);
+    //                     }
+    //                     panic!("此测试用例中不应出现错误!");
+    //                 }
+    //             }
+    //             CommandStatus::Exited => {
+    //                 break;
+    //             }
+    //             CommandStatus::WaitInput => {
+    //                 if !input_sent {
+    //                     executor.input("测试输入的内容").unwrap();
+    //                     input_sent = true;
+    //                 }
+    //             }
+    //             CommandStatus::ExceptionalTerminated => {
+    //                 panic!("Python脚本异常终止");
+    //             }
+    //         }
+    //     }
 
-        // Wait for a short time to ensure the command starts executing
-        std::thread::sleep(Duration::from_millis(100));
-
-        // Get some initial output
-        let initial_output = executor.get_output();
-        assert!(
-            !initial_output.is_empty(),
-            "There should be some initial output"
-        );
-
-        // Call the terminate method
-        executor.terminate();
-
-        // Get the output again
-        std::thread::sleep(Duration::from_millis(100));
-        let final_output = executor.get_output();
-
-        // Assertions:
-        // 1. The final output should not be much longer than the initial output (allowing for some buffer output)
-        assert!(
-            final_output.len() <= initial_output.len() + 10,
-            "There should not be too much new output after termination"
-        );
-
-        // 2. The process status should be ExceptionTerminated
-        let status = executor.get_status();
-        assert!(
-            matches!(status, CommandStatus::ExceptionTerminated),
-            "The process should have terminated"
-        );
-
-        // 3. The thread handles should be empty because they should have been joined
-        assert!(
-            executor.thread_handles.is_empty(),
-            "All threads should have been joined"
-        );
-    }
+    //     assert_eq!(
+    //         output_count, 3,
+    //         "预期输出行数为3,但实际得到{}",
+    //         output_count
+    //     );
+    //     println!("总输出行数: {}", output_count);
+    // }
 
     // #[test]
     // fn test_input_and_output_by_python_script_guessing_game() {

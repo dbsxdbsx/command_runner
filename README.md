@@ -4,9 +4,13 @@
 
 ## TODO
 - Test with guessing game(Rust/python script)
+- buffer.fill(0); need?
+- force temrinate when catch err output?
 - change result to anyhow
 - get_status ... have to be mut?/ output has to be Vec<>?
 - does `get_output` would be consume 1 ele each time after calling?
+- let 3 threads be green thread
+- distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
 
 ## Key Features
 

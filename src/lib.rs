@@ -1,6 +1,6 @@
 mod test;
 
-use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender};
+use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use encoding_rs::GB18030;
 use mio::{Events, Interest, Poll, Token};
 use std::io::{BufReader, Read, Write};
@@ -24,10 +24,10 @@ const STDIN: Token = Token(0);
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
-    Running,
-    Finished,
-    WaitingForInput,
-    ExceptionTerminated,
+    Inited,
+    Exited, // exit with success
+    WaitInput,
+    ExceptionalTerminated, // exit with failure
 }
 
 pub struct CommandRunner {
@@ -151,15 +151,22 @@ impl CommandRunner {
         is_terminated: Arc<AtomicBool>,
     ) {
         while !is_terminated.load(Ordering::Relaxed) {
-            match receiver.recv_timeout(Duration::from_millis(100)) {
+            match receiver.try_recv() {
                 Ok(input) => {
                     if let Err(e) = writeln!(stream, "{}", input) {
                         eprintln!("Error writing to stdin: {}", e);
-                        break;
+                        continue; // 继续尝试,而不是退出
+                    }
+                    if let Err(e) = stream.flush() {
+                        eprintln!("Error flushing stdin: {}", e);
+                        continue;
                     }
                 }
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => break,
+                Err(TryRecvError::Empty) => {
+                    std::thread::sleep(Duration::from_millis(10)); // 短暂休眠,减少CPU使用
+                    continue;
+                }
+                Err(TryRecvError::Disconnected) => break,
             }
         }
     }
@@ -189,19 +196,19 @@ impl CommandRunner {
         match self.child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
-                    CommandStatus::Finished
+                    CommandStatus::Exited
                 } else {
-                    CommandStatus::ExceptionTerminated
+                    CommandStatus::ExceptionalTerminated
                 }
             }
             Ok(None) => {
                 if self.is_ready_for_input() {
-                    CommandStatus::WaitingForInput
+                    CommandStatus::WaitInput
                 } else {
-                    CommandStatus::Running
+                    CommandStatus::Inited
                 }
             }
-            Err(_) => CommandStatus::ExceptionTerminated,
+            Err(_) => CommandStatus::ExceptionalTerminated,
         }
     }
 

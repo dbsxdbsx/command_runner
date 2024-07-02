@@ -24,10 +24,10 @@ const STDIN: Token = Token(0);
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
-    Inited,
-    Exited, // exit with success
-    WaitInput,
-    ExceptionalTerminated, // exit with failure
+    Running,               // the command is valid initialized and is running
+    ExitedWithOkStatus,    // exit with success
+    ExceptionalTerminated, // exit with failure  TODO: refine with `ForceTerminated` and `ExitedPanic`?
+    WaitingInput,          // the command reqeust input when it is running
 }
 
 pub struct CommandRunner {
@@ -196,16 +196,16 @@ impl CommandRunner {
         match self.child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
-                    CommandStatus::Exited
+                    CommandStatus::ExitedWithOkStatus
                 } else {
                     CommandStatus::ExceptionalTerminated
                 }
             }
             Ok(None) => {
                 if self.is_ready_for_input() {
-                    CommandStatus::WaitInput
+                    CommandStatus::WaitingInput
                 } else {
-                    CommandStatus::Inited
+                    CommandStatus::Running
                 }
             }
             Err(_) => CommandStatus::ExceptionalTerminated,

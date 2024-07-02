@@ -53,7 +53,7 @@ mod tests {
         let mut output_count = 0;
         loop {
             match executor.get_status() {
-                CommandStatus::Inited => {
+                CommandStatus::Running => {
                     let output = executor.get_output();
                     if !output.is_empty() {
                         output_count += output.len();
@@ -72,7 +72,7 @@ mod tests {
                         panic!("There should not be error in this test case!")
                     }
                 }
-                CommandStatus::Exited => {
+                CommandStatus::ExitedWithOkStatus => {
                     println!("Built-in Command completed successfully");
                     break;
                 }
@@ -101,7 +101,7 @@ mod tests {
         let mut all_output = Vec::new();
         loop {
             match executor.get_status() {
-                CommandStatus::Inited => {
+                CommandStatus::Running => {
                     // collect output
                     let output = executor.get_output();
                     all_output.extend(output);
@@ -109,7 +109,7 @@ mod tests {
                     let error = executor.get_error();
                     assert!(error.is_empty(), "Unexpected error output: {:?}", error);
                 }
-                CommandStatus::Exited => {
+                CommandStatus::ExitedWithOkStatus => {
                     println!("Custom application command execution completed");
                     break;
                 }

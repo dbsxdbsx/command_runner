@@ -3,14 +3,14 @@
 `command_runner` is a cross-platform Rust crate designed for executing terminal commands interactively. It wraps various features in a struct to provide a seamless command execution experience.
 
 ## TODO
-- Test with guessing game(Rust/python script)
 - buffer.fill(0); need?
+- does `get_output` would be consume 1 ele each time after calling? get_status ... have to be mut?/ output has to be Vec<>?
+- no init stdin, but do so when it is for ok for input?
 - force temrinate when catch err output?
-- change result to anyhow
-- get_status ... have to be mut?/ output has to be Vec<>?
-- does `get_output` would be consume 1 ele each time after calling?
+- should std err always exit command? distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
 - let 3 threads be green thread
-- distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
+- Test with guessing game(Rust/python script)
+- change result to anyhow
 
 ## Key Features
 

@@ -7,7 +7,6 @@
 - no init stdin, but do so when it is for ok for input?
 - let 3 threads be green thread
 - Test with guessing game(Rust/python script)
-- change result to anyhow
 
 ## Key Features
 

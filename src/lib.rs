@@ -1,5 +1,6 @@
 mod test;
 
+use anyhow::{Context, Result};
 use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use encoding_rs::GB18030;
 use mio::{Events, Interest, Poll, Token};
@@ -41,7 +42,7 @@ pub struct CommandRunner {
 }
 
 impl CommandRunner {
-    pub fn run(command: &str) -> Result<Self, std::io::Error> {
+    pub fn run(command: &str) -> Result<CommandRunner> {
         let (output_sender, output_receiver) = unbounded();
         let (error_sender, error_receiver) = unbounded();
         let (input_sender, input_receiver) = unbounded();
@@ -58,48 +59,48 @@ impl CommandRunner {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn()
+            .context("Failed to spawn command")?;
 
-        let stdin = child.stdin.take().expect("Failed to capture stdin");
-        let stdout = child.stdout.take().expect("Failed to capture stdout");
-        let stderr = child.stderr.take().expect("Failed to capture stderr");
+        let stdin = child.stdin.take().context("Failed to capture stdin")?;
+        let stdout = child.stdout.take().context("Failed to capture stdout")?;
+        let stderr = child.stderr.take().context("Failed to capture stderr")?;
 
-        // atomic status flag required to be stored in instance field
         let is_terminated = Arc::new(AtomicBool::new(false));
-        let is_terminated_clone = Arc::clone(&is_terminated);
 
-        // for std out
-        let stdout_handle =
-            thread::spawn(move || Self::read_stream(stdout, output_sender, is_terminated_clone));
+        // 创建线程句柄
+        let stdout_handle = {
+            let is_terminated_clone = Arc::clone(&is_terminated);
+            thread::spawn(move || Self::read_stream(stdout, output_sender, is_terminated_clone))
+        };
 
-        // for std error
-        let is_terminated_clone = Arc::clone(&is_terminated);
-        let stderr_handle =
-            thread::spawn(move || Self::read_stream(stderr, error_sender, is_terminated_clone));
+        let stderr_handle = {
+            let is_terminated_clone = Arc::clone(&is_terminated);
+            thread::spawn(move || Self::read_stream(stderr, error_sender, is_terminated_clone))
+        };
 
-        // for std input
-        let is_terminated_clone = Arc::clone(&is_terminated);
-        let stdin_handle =
-            thread::spawn(move || Self::write_stream(stdin, input_receiver, is_terminated_clone));
+        let stdin_handle = {
+            let is_terminated_clone = Arc::clone(&is_terminated);
+            thread::spawn(move || Self::write_stream(stdin, input_receiver, is_terminated_clone))
+        };
 
-        // poll of mio
-        let poll = Poll::new()?;
+        let poll = Poll::new().context("Failed to create poll")?;
+
         #[cfg(windows)]
-        {
-            if let Some(stdin) = child.stdin.as_ref() {
-                let stdin_handle = stdin.as_raw_handle();
-                let mut pipe = unsafe { NamedPipe::from_raw_handle(stdin_handle) };
-                poll.registry()
-                    .register(&mut pipe, STDIN, Interest::WRITABLE)?;
-            }
+        if let Some(stdin) = child.stdin.as_ref() {
+            let stdin_handle = stdin.as_raw_handle();
+            let mut pipe = unsafe { NamedPipe::from_raw_handle(stdin_handle) };
+            poll.registry()
+                .register(&mut pipe, STDIN, Interest::WRITABLE)
+                .context("Failed to register stdin for polling")?;
         }
+
         #[cfg(any(unix, target_os = "android"))]
-        {
-            if let Some(stdin) = child.stdin.as_ref() {
-                let stdin_fd = stdin.as_raw_fd();
-                poll.registry()
-                    .register(&mut SourceFd(&stdin_fd), STDIN, Interest::WRITABLE)?;
-            }
+        if let Some(stdin) = child.stdin.as_ref() {
+            let stdin_fd = stdin.as_raw_fd();
+            poll.registry()
+                .register(&mut SourceFd(&stdin_fd), STDIN, Interest::WRITABLE)
+                .context("Failed to register stdin for polling")?;
         }
 
         Ok(CommandRunner {
@@ -165,13 +166,10 @@ impl CommandRunner {
         }
     }
 
-    pub fn input(&self, input: &str) -> Result<(), std::io::Error> {
-        self.input_sender.send(input.to_string()).map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to send input: {}", e),
-            )
-        })
+    pub fn input(&self, input: &str) -> Result<()> {
+        self.input_sender
+            .send(input.to_string())
+            .context("Failed to send input")
     }
 
     pub fn terminate(&mut self) {

@@ -1,6 +1,6 @@
 mod test;
 
-use crossbeam::channel::{unbounded, Receiver, RecvTimeoutError, Sender, TryRecvError};
+use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use encoding_rs::GB18030;
 use mio::{Events, Interest, Poll, Token};
 use std::io::{BufReader, Read, Write};
@@ -228,12 +228,12 @@ impl CommandRunner {
         }
     }
 
-    pub fn get_output(&self) -> Vec<String> {
-        self.output_receiver.try_iter().collect()
+    pub fn get_one_output(&self) -> Option<String> {
+        self.output_receiver.try_iter().next()
     }
 
-    pub fn get_error(&self) -> Vec<String> {
-        self.error_receiver.try_iter().collect()
+    pub fn get_one_error(&self) -> Option<String> {
+        self.error_receiver.try_iter().next()
     }
 }
 

@@ -20,9 +20,9 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
 
         // Get some initial output
-        let initial_output = executor.get_output();
+        let initial_output = executor.get_one_output();
         assert!(
-            !initial_output.is_empty(),
+            initial_output.is_some(),
             "There should be some initial output"
         );
 
@@ -54,23 +54,12 @@ mod tests {
         loop {
             match executor.get_status() {
                 CommandStatus::Running => {
-                    let output = executor.get_output();
-                    if !output.is_empty() {
+                    if let Some(output) = executor.get_one_output() {
                         output_count += output.len();
-                        println!("Current Output:");
-                        for line in output {
-                            println!("{}", line);
-                        }
+                        println!("Current Output: {}", output);
                     }
 
-                    let error = executor.get_error();
-                    if !error.is_empty() {
-                        println!("Current Error:");
-                        for line in error {
-                            println!("{}", line);
-                        }
-                        panic!("There should not be error in this test case!")
-                    }
+                    assert!(executor.get_one_error().is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Built-in Command completed successfully");
@@ -103,11 +92,13 @@ mod tests {
             match executor.get_status() {
                 CommandStatus::Running => {
                     // collect output
-                    let output = executor.get_output();
-                    all_output.extend(output);
+                    // Since python is slower(with delay on purpose),
+                    // So it would catch many `None`
+                    if let Some(output) = executor.get_one_output() {
+                        all_output.push(output);
+                    }
                     // check output error
-                    let error = executor.get_error();
-                    assert!(error.is_empty(), "Unexpected error output: {:?}", error);
+                    assert!(executor.get_one_error().is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Custom application command execution completed");

@@ -26,13 +26,12 @@ mod tests {
             "There should be some initial output"
         );
 
-        // Call the terminate method
+        // Intentionally call the terminate method
         executor.terminate();
 
         // Assertions:
-        let status = executor.get_status();
         assert!(
-            matches!(status, CommandStatus::ExceptionalTerminated),
+            matches!(executor.get_status(), CommandStatus::ExceptionalTerminated),
             "The process should have terminated"
         );
     }

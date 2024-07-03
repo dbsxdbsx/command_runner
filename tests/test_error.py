@@ -1,4 +1,3 @@
-# test_error.py (1-17)
 import sys
 
 

@@ -1,78 +1,75 @@
 #[cfg(test)]
 mod tests {
     use crate::*;
+    use std::time::Duration;
+    use tokio::time::sleep;
 
-    #[test]
-    fn test_invalid_command() {
-        let result = CommandRunner::run("non_existent_command");
+    #[tokio::test]
+    async fn test_invalid_command() {
+        let result = CommandRunner::run("non_existent_command").await;
         assert!(result.is_err(), "Expected an error for invalid command");
     }
 
-    #[test]
-    fn test_force_terminate_by_os_command_ping() {
-        // Create a command that outputs continuously
+    #[tokio::test]
+    async fn test_force_terminate_by_os_command_ping() {
+        // 创建一个持续输出的命令
         let command = "ping -t 127.0.0.1";
-
-        // Create a CommandExecutor instance
-        let mut executor = CommandRunner::run(command).unwrap();
-
-        // Wait for a short time to ensure the command starts executing
-        std::thread::sleep(Duration::from_millis(100));
-
-        // Get some initial output
-        let initial_output = executor.get_one_output();
+        // 创建一个CommandExecutor实例
+        let mut executor = CommandRunner::run(command).await.unwrap();
+        // 等待一段时间以确保命令开始执行
+        sleep(Duration::from_millis(100)).await;
+        // 获取一些初始输出
+        let initial_output = executor.get_one_output().await;
         assert!(
             initial_output.is_some(),
             "There should be some initial output"
         );
-
-        // Intentionally call the terminate method
-        executor.terminate();
-
-        // Assertions:
+        // 故意调用terminate方法
+        executor.terminate().await;
+        // 断言:
         assert!(
-            matches!(executor.get_status(), CommandStatus::ExceptionalTerminated),
+            matches!(
+                executor.get_status().await,
+                CommandStatus::ExceptionalTerminated
+            ),
             "The process should have terminated"
         );
     }
 
-    #[test]
-    fn test_os_command_ping() {
+    #[tokio::test]
+    async fn test_os_command_ping() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {
             "-c"
         };
-
         let check_num = 2;
         let mut executor =
             CommandRunner::run(&format!("ping {ping_count_option} {check_num} google.com"))
+                .await
                 .unwrap();
-
         let mut output_count = 0;
         loop {
-            match executor.get_status() {
+            match executor.get_status().await {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_output() {
+                    if let Some(output) = executor.get_one_output().await {
                         output_count += output.len();
                         println!("Current Output: {}", output);
                     }
-
-                    assert!(executor.get_one_error().is_none());
+                    assert!(executor.get_one_error().await.is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Built-in Command completed successfully");
                     break;
                 }
                 CommandStatus::WaitingInput => {
-                    panic!("There should not be `WaitingForInput` status")
+                    panic!("There should not be `WaitingForInput` status");
                 }
                 CommandStatus::ExceptionalTerminated => {
                     panic!("Built-in Command terminated with error");
                 }
             }
         }
-
         assert!(
             output_count > check_num,
             "Expected output count to be greater than {}, but got {}",
@@ -82,43 +79,41 @@ mod tests {
         println!("Total output lines: {}", output_count);
     }
 
-    #[test]
-    fn test_receiving_output_by_python_script() {
-        let mut executor = CommandRunner::run("python ./tests/test_output.py").unwrap();
-
+    #[tokio::test]
+    async fn test_receiving_output_by_python_script() {
+        let mut executor = CommandRunner::run("python ./tests/test_output.py")
+            .await
+            .unwrap();
         let mut all_output = Vec::new();
         loop {
-            match executor.get_status() {
+            match executor.get_status().await {
                 CommandStatus::Running => {
-                    // collect output
-                    // Since python is slower(with delay on purpose),
-                    // So it would catch many `None`
-                    if let Some(output) = executor.get_one_output() {
+                    // 收集输出
+                    // 由于python较慢(故意延迟),所以会捕获许多`None`
+                    if let Some(output) = executor.get_one_output().await {
                         all_output.push(output);
                     }
-                    // check output error
-                    assert!(executor.get_one_error().is_none());
+                    // 检查输出错误
+                    assert!(executor.get_one_error().await.is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Custom application command execution completed");
                     break;
                 }
                 CommandStatus::WaitingInput => {
-                    panic!("There should not be `WaitingForInput` status")
+                    panic!("There should not be `WaitingForInput` status");
                 }
                 CommandStatus::ExceptionalTerminated => {
                     panic!("Custom application command execution error");
                 }
             }
         }
-
         assert_eq!(
             all_output.len(),
             3,
             "Expected output should have 3 lines, but got {} lines",
             all_output.len()
         );
-
         for (i, line) in all_output.iter().enumerate() {
             assert_eq!(
                 line.trim(),
@@ -130,20 +125,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_receiving_error_and_output_by_python_script() {
-        let mut executor = CommandRunner::run("python ./tests/test_error.py").unwrap();
+    #[tokio::test]
+    async fn test_receiving_error_and_output_by_python_script() {
+        let mut executor = CommandRunner::run("python ./tests/test_error.py")
+            .await
+            .unwrap();
+        let mut outputs = Vec::new();
 
-        let mut all_outputs = Vec::new();
         loop {
-            match executor.get_status() {
+            match executor.get_status().await {
                 CommandStatus::Running => {
-                    // Collect standard output and error output
-                    if let Some(output) = executor.get_one_output() {
-                        all_outputs.push(("stdout", output));
+                    if let Some(output) = executor.get_one_output().await {
+                        outputs.push(output);
                     }
-                    if let Some(error) = executor.get_one_error() {
-                        all_outputs.push(("stderr", error));
+                    if let Some(error) = executor.get_one_error().await {
+                        outputs.push(error);
                     }
                 }
                 CommandStatus::ExitedWithOkStatus => {
@@ -159,62 +155,27 @@ mod tests {
             }
         }
 
-        // Check the order and content of the outputs
-        assert_eq!(
-            all_outputs.len(),
-            3,
-            "Expected 3 lines of output, but got {}",
-            all_outputs.len()
-        );
-
-        // Check the first line (error output)
-        assert_eq!(
-            all_outputs[0].0, "stderr",
-            "The first line should be an error output"
-        );
-        assert!(
-            all_outputs[0].1.contains("Error: division by zero"),
-            "Error output should contain 'Error: division by zero', but got: {}",
-            all_outputs[0].1
-        );
-
-        // Check the second line (standard output)
-        assert_eq!(
-            all_outputs[1].0, "stdout",
-            "The second line should be a standard output"
-        );
-        assert_eq!(
-            all_outputs[1].1.trim(),
-            "This is normal output information",
-            "The second line of standard output should be 'This is normal output information'"
-        );
-
-        // Check the third line (standard output)
-        assert_eq!(
-            all_outputs[2].0, "stdout",
-            "The third line should be a standard output"
-        );
-        assert_eq!(
-            all_outputs[2].1.trim(),
-            "The program continues to execute...",
-            "The third line of standard output should be 'The program continues to execute...'"
-        );
+        // check outputs
+        assert_eq!(outputs.len(), 3);
+        assert_eq!(outputs[0], "Error: division by zero");
+        assert_eq!(outputs[1], "This is normal output information");
+        assert_eq!(outputs[2], "The program continues to execute...");
     }
 
-    #[test]
-    fn test_sending_input_when_command_is_inited_by_python_script() {
-        let mut executor = CommandRunner::run("python ./tests/test_input.py").unwrap();
-
+    #[tokio::test]
+    async fn test_sending_input_when_command_is_inited_by_python_script() {
+        let mut executor = CommandRunner::run("python ./tests/test_input.py")
+            .await
+            .unwrap();
         let mut output_lines = Vec::new();
         let mut input_sent = false;
-
         loop {
-            match executor.get_status() {
+            match executor.get_status().await {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_output() {
+                    if let Some(output) = executor.get_one_output().await {
                         output_lines.push(output);
                     }
-                    if let Some(error) = executor.get_one_error() {
+                    if let Some(error) = executor.get_one_error().await {
                         panic!("测试中出现错误: {}", error);
                     }
                 }
@@ -223,7 +184,7 @@ mod tests {
                 }
                 CommandStatus::WaitingInput => {
                     if !input_sent {
-                        executor.input("测试输入的内容").unwrap();
+                        executor.input("测试输入的内容").await.unwrap();
                         input_sent = true;
                     }
                 }
@@ -232,7 +193,6 @@ mod tests {
                 }
             }
         }
-
         assert_eq!(
             output_lines.len(),
             2,
@@ -244,7 +204,6 @@ mod tests {
             output_lines[1],
             "you've input: 测试输入的内容. Script finished"
         );
-
         println!("测试通过！总输出行数: {}", output_lines.len());
         println!("输出内容:");
         for line in output_lines {

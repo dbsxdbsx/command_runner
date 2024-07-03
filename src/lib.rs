@@ -1,27 +1,13 @@
 mod test;
 
 use anyhow::{Context, Result};
-use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
 use encoding_rs::GB18030;
-use mio::{Events, Interest, Poll, Token};
-use std::io::{BufReader, Read, Write};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
-
-#[cfg(any(unix, target_os = "android"))]
-use mio::unix::SourceFd;
-#[cfg(any(unix, target_os = "android"))]
-use std::os::unix::io::AsRawFd;
-
-#[cfg(windows)]
-use mio::windows::NamedPipe;
-#[cfg(windows)]
-use std::os::windows::io::{AsRawHandle, FromRawHandle};
-
-const STDIN: Token = Token(0);
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::process::{Child, Command};
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::sync::Notify;
 
 #[derive(Debug, PartialEq, Copy, Clone)]
 pub enum CommandStatus {
@@ -33,19 +19,18 @@ pub enum CommandStatus {
 
 pub struct CommandRunner {
     child: Child,
-    output_receiver: Receiver<String>,
-    error_receiver: Receiver<String>,
-    input_sender: Sender<String>,
-    thread_handles: Vec<JoinHandle<()>>,
-    poll: Poll,
+    output_receiver: UnboundedReceiver<String>,
+    error_receiver: UnboundedReceiver<String>,
+    input_sender: UnboundedSender<String>,
     is_terminated: Arc<AtomicBool>,
+    input_ready: Arc<Notify>,
 }
 
 impl CommandRunner {
-    pub fn run(command: &str) -> Result<CommandRunner> {
-        let (output_sender, output_receiver) = unbounded();
-        let (error_sender, error_receiver) = unbounded();
-        let (input_sender, input_receiver) = unbounded();
+    pub async fn run(command: &str) -> Result<Self> {
+        let (output_sender, output_receiver) = unbounded_channel();
+        let (error_sender, error_receiver) = unbounded_channel();
+        let (input_sender, mut input_receiver) = unbounded_channel::<String>();
 
         let parts: Vec<&str> = command.split_whitespace().collect();
         let (cmd, args) = if parts.len() > 1 {
@@ -56,67 +41,66 @@ impl CommandRunner {
 
         let mut child = Command::new(cmd)
             .args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .context("Failed to spawn command")?;
 
-        let stdin = child.stdin.take().context("Failed to capture stdin")?;
+        let mut stdin = child.stdin.take().context("Failed to capture stdin")?;
         let stdout = child.stdout.take().context("Failed to capture stdout")?;
         let stderr = child.stderr.take().context("Failed to capture stderr")?;
 
         let is_terminated = Arc::new(AtomicBool::new(false));
 
-        // 创建线程句柄
-        let stdout_handle = {
-            let is_terminated_clone = Arc::clone(&is_terminated);
-            thread::spawn(move || Self::read_stream(stdout, output_sender, is_terminated_clone))
-        };
-
-        let stderr_handle = {
-            let is_terminated_clone = Arc::clone(&is_terminated);
-            thread::spawn(move || Self::read_stream(stderr, error_sender, is_terminated_clone))
-        };
-
-        let stdin_handle = {
-            let is_terminated_clone = Arc::clone(&is_terminated);
-            thread::spawn(move || Self::write_stream(stdin, input_receiver, is_terminated_clone))
-        };
-
-        let poll = Poll::new().context("Failed to create poll")?;
-
-        #[cfg(windows)]
-        if let Some(stdin) = child.stdin.as_ref() {
-            let stdin_handle = stdin.as_raw_handle();
-            let mut pipe = unsafe { NamedPipe::from_raw_handle(stdin_handle) };
-            poll.registry()
-                .register(&mut pipe, STDIN, Interest::WRITABLE)
-                .context("Failed to register stdin for polling")?;
-        }
-
-        #[cfg(any(unix, target_os = "android"))]
-        if let Some(stdin) = child.stdin.as_ref() {
-            let stdin_fd = stdin.as_raw_fd();
-            poll.registry()
-                .register(&mut SourceFd(&stdin_fd), STDIN, Interest::WRITABLE)
-                .context("Failed to register stdin for polling")?;
-        }
+        // stdout
+        let is_terminated_clone = Arc::clone(&is_terminated);
+        tokio::spawn(async move {
+            Self::read_stream(stdout, output_sender, is_terminated_clone).await;
+        });
+        // stderr
+        let is_terminated_clone = Arc::clone(&is_terminated);
+        tokio::spawn(async move {
+            Self::read_stream(stderr, error_sender, is_terminated_clone).await;
+        });
+        // stdin
+        let is_terminated_clone = Arc::clone(&is_terminated);
+        let input_ready = Arc::new(Notify::new());
+        let input_ready_clone = Arc::clone(&input_ready);
+        tokio::spawn(async move {
+            while !is_terminated_clone.load(Ordering::Relaxed) {
+                tokio::select! {
+                    Some(input) = input_receiver.recv() => {
+                        if let Err(e) = stdin.write_all(input.as_bytes()).await {
+                            eprintln!("Error writing to stdin: {}", e);
+                            continue;
+                        }
+                        if let Err(e) = stdin.flush().await {
+                            eprintln!("Error flushing stdin: {}", e);
+                            continue;
+                        }
+                    }
+                    _ = input_ready_clone.notified() => {
+                        // Do nothing, just wake up to check termination flag
+                    }
+                }
+            }
+        });
 
         Ok(CommandRunner {
             child,
             output_receiver,
             error_receiver,
             input_sender,
-            thread_handles: vec![stdout_handle, stderr_handle, stdin_handle],
-            poll,
             is_terminated,
+            input_ready,
         })
     }
 
-    fn read_stream<R: std::io::Read>(
-        stream: R,
-        sender: crossbeam::channel::Sender<String>,
+    async fn read_stream(
+        stream: impl tokio::io::AsyncRead + Unpin,
+        sender: UnboundedSender<String>,
         is_terminated: Arc<AtomicBool>,
     ) {
         let mut reader = BufReader::new(stream);
@@ -124,15 +108,16 @@ impl CommandRunner {
         let mut leftover = Vec::new();
 
         while !is_terminated.load(Ordering::Relaxed) {
-            match reader.read(&mut buffer) {
+            match reader.read(&mut buffer).await {
+                Ok(0) => break, // EOF
                 Ok(n) => {
                     leftover.extend_from_slice(&buffer[..n]);
 
-                    // find and process complete lines
+                    // 查找并处理完整的行
                     while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
                         let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
                         let (decoded, _, _) = GB18030.decode(&line);
-                        sender.send(decoded.into_owned()).unwrap();
+                        let _ = sender.send(decoded.trim().into());
                     }
                 }
                 Err(_) => break,
@@ -140,51 +125,21 @@ impl CommandRunner {
         }
     }
 
-    fn write_stream<W: std::io::Write>(
-        mut stream: W,
-        receiver: Receiver<String>,
-        is_terminated: Arc<AtomicBool>,
-    ) {
-        while !is_terminated.load(Ordering::Relaxed) {
-            match receiver.try_recv() {
-                Ok(input) => {
-                    if let Err(e) = writeln!(stream, "{}", input) {
-                        eprintln!("Error writing to stdin: {}", e);
-                        continue; // 继续尝试,而不是退出
-                    }
-                    if let Err(e) = stream.flush() {
-                        eprintln!("Error flushing stdin: {}", e);
-                        continue;
-                    }
-                }
-                Err(TryRecvError::Empty) => {
-                    std::thread::sleep(Duration::from_millis(10)); // 短暂休眠,减少CPU使用
-                    continue;
-                }
-                Err(TryRecvError::Disconnected) => break,
-            }
-        }
-    }
-
-    pub fn input(&self, input: &str) -> Result<()> {
+    pub async fn input(&self, input: &str) -> Result<()> {
         self.input_sender
             .send(input.to_string())
-            .context("Failed to send input")
+            .context("Failed to send input")?;
+        self.input_ready.notify_one();
+        Ok(())
     }
 
-    pub fn terminate(&mut self) {
-        // 设置终止标志
+    pub async fn terminate(&mut self) {
         self.is_terminated.store(true, Ordering::Relaxed);
-
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-
-        for handle in self.thread_handles.drain(..) {
-            handle.join().unwrap()
-        }
+        let _ = self.child.kill().await;
+        let _ = self.child.wait().await;
     }
 
-    pub fn get_status(&mut self) -> CommandStatus {
+    pub async fn get_status(&mut self) -> CommandStatus {
         match self.child.try_wait() {
             Ok(Some(status)) => {
                 if status.success() {
@@ -194,7 +149,7 @@ impl CommandRunner {
                 }
             }
             Ok(None) => {
-                if self.is_ready_for_input() {
+                if self.is_ready_for_input().await {
                     CommandStatus::WaitingInput
                 } else {
                     CommandStatus::Running
@@ -204,39 +159,39 @@ impl CommandRunner {
         }
     }
 
-    fn is_ready_for_input(&mut self) -> bool {
-        if self.child.stdin.is_none() {
-            return false;
-        }
+    async fn is_ready_for_input(&self) -> bool {
+        // TODO: 这里需要一个更复杂的逻辑来检测是否准备好接受输入
+        // 为了简化,我们假设总是准备好接受输入
+        // true
+        false
 
-        let mut events = Events::with_capacity(1);
-        match self
-            .poll
-            .poll(&mut events, Some(std::time::Duration::from_millis(0)))
-        {
-            Ok(_) => {
-                for event in events.iter() {
-                    if event.token() == STDIN && event.is_writable() {
-                        return true;
-                    }
-                }
-                false
-            }
-            Err(_) => false,
-        }
+        // the sync version
+        // if self.child.stdin.is_none() {
+        //     return false;
+        // }
+
+        // let mut events = Events::with_capacity(1);
+        // match self
+        //     .poll
+        //     .poll(&mut events, Some(std::time::Duration::from_millis(0)))
+        // {
+        //     Ok(_) => {
+        //         for event in events.iter() {
+        //             if event.token() == STDIN && event.is_writable() {
+        //                 return true;
+        //             }
+        //         }
+        //         false
+        //     }
+        //     Err(_) => false,
+        // }
     }
 
-    pub fn get_one_output(&self) -> Option<String> {
-        self.output_receiver.try_iter().next()
+    pub async fn get_one_output(&mut self) -> Option<String> {
+        self.output_receiver.recv().await
     }
 
-    pub fn get_one_error(&self) -> Option<String> {
-        self.error_receiver.try_iter().next()
-    }
-}
-
-impl Drop for CommandRunner {
-    fn drop(&mut self) {
-        self.terminate();
+    pub async fn get_one_error(&mut self) -> Option<String> {
+        self.error_receiver.recv().await
     }
 }

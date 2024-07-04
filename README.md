@@ -3,6 +3,7 @@
 `command_runner` is a cross-platform Rust crate designed for executing terminal commands interactively. It wraps various features in a struct to provide a seamless command execution experience.
 
 ## TODO
+- combine `get_output` with`get_error` and create a Enum `Output` with fn `is_error`
 - no init stdin, but do so when it is for ok for input?
 - distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
 - let 3 threads be green thread

@@ -47,17 +47,6 @@ Add the following to your `Cargo.toml`:
 [dependencies]
 command_runner = "*"
 
-
-
-## Installation
-
-Add the following to your `Cargo.toml`:
-
-```toml
-[dependencies]
-command_runner = "*"
-```
-
 ## Usage Example
 
 ```rust

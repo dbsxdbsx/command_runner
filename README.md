@@ -1,5 +1,5 @@
 # command_runner
-
+ **NOT STABLE YET! DON'T USE IT!**
 `command_runner` is a cross-platform Rust crate designed for executing terminal commands interactively. It wraps various features in a struct to provide a seamless command execution experience.
 
 ## TODO
@@ -10,11 +10,24 @@
 
 ## Key Features
 
-1. **Execute Command Line Instructions**: Run any command line instruction from within your Rust application.
-2. **Check Command Execution Status**: Determine if a command executed successfully.
-3. **Fetch Command Output**: Retrieve the real-time output of the command, similar to what you would see in a terminal.
-4. **Handle User Input**: If a running command requires user input, the crate provides a way to input data easily while still capturing the command's output.
-5. **Cross-Platform Compatibility**: Works seamlessly across different platforms, including Linux, macOS, Windows, and mobile platforms like Android.
+1. **Command Execution**: Run any command line instruction directly from your Rust application.
+2. **Execution Status Checking**: Easily determine the success or failure of executed commands.
+3. **Real-time Output Capture**: Retrieve and monitor command output in real-time, mirroring terminal behavior.
+4. **Interactive Input Handling**: Seamlessly provide user input for commands that require it, while still capturing output.
+5. **Cross-Platform Support**: Function consistently across Linux, macOS, Windows, and mobile platforms like Android.
+6. **Efficient Concurrency with Green Threads**: Utilize lightweight green threads for efficient concurrent execution without the overhead of OS thread creation. This feature integrates smoothly without requiring explicit runtime usage, offering flexibility and runtime-agnostic concurrency.
+7. **no_std Compatibility**: Operate in environments without the standard library, enhancing versatility across various contexts.
+8. **Simplified Command Line Interface**: Streamline CLI operations in Rust applications with an easy-to-use, feature-rich crate.
+
+## Installation
+
+Add the following to your `Cargo.toml`:
+
+```toml
+[dependencies]
+command_runner = "*"
+
+
 
 ## Installation
 

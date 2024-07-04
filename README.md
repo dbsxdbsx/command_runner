@@ -7,6 +7,7 @@
 - distinguish `ExceptionalTerminated` into `forceTerminated` and `inner panic`?
 - let 3 threads be green thread
 - Test with guessing game(Rust/python script)
+- make some field inner mutable, so that no need to make the instance mutable.
 
 ## Key Features
 

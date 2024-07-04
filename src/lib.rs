@@ -1,36 +1,28 @@
-mod test;
+use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
-use anyhow::{Context, Result};
-use encoding_rs::GB18030;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio::sync::Notify;
+pub struct CLI {
+    stdout_receiver: Receiver<String>,
+    stderr_receiver: Receiver<String>,
+    child: Arc<Mutex<Child>>,
+    status: Arc<Mutex<CommandStatus>>,
+    output: Arc<Mutex<String>>,
+    error: Arc<Mutex<String>>,
+}
 
-#[derive(Debug, PartialEq, Copy, Clone)]
+#[derive(Clone, Copy, Debug)]
 pub enum CommandStatus {
-    Running,               // the command is valid initialized and is running
-    ExitedWithOkStatus,    // exit with success
-    ExceptionalTerminated, // exit with failure  TODO: refine with `ForceTerminated` and `ExitedPanic`?
-    WaitingInput,          // the command reqeust input when it is running
+    Running,
+    ExitedWithOkStatus,
+    ExceptionalTerminated,
 }
 
-pub struct CommandRunner {
-    child: Child,
-    output_receiver: UnboundedReceiver<String>,
-    error_receiver: UnboundedReceiver<String>,
-    input_sender: UnboundedSender<String>,
-    is_terminated: Arc<AtomicBool>,
-    input_ready: Arc<Notify>,
-}
-
-impl CommandRunner {
-    pub async fn run(command: &str) -> Result<Self> {
-        let (output_sender, output_receiver) = unbounded_channel();
-        let (error_sender, error_receiver) = unbounded_channel();
-        let (input_sender, mut input_receiver) = unbounded_channel::<String>();
+impl CLI {
+    pub fn run(command: &str) -> std::io::Result<Self> {
+        let (stdout_sender, stdout_receiver) = unbounded();
+        let (stderr_sender, stderr_receiver) = unbounded();
 
         let parts: Vec<&str> = command.split_whitespace().collect();
         let (cmd, args) = if parts.len() > 1 {
@@ -38,160 +30,98 @@ impl CommandRunner {
         } else {
             (parts[0], &[][..])
         };
+        let child = Arc::new(Mutex::new(
+            Command::new(cmd)
+                .args(args)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        ));
 
-        let mut child = Command::new(cmd)
-            .args(args)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .context("Failed to spawn command")?;
+        let stdout = child.lock().unwrap().stdout.take().unwrap();
+        let stderr = child.lock().unwrap().stderr.take().unwrap();
 
-        let mut stdin = child.stdin.take().context("Failed to capture stdin")?;
-        let stdout = child.stdout.take().context("Failed to capture stdout")?;
-        let stderr = child.stderr.take().context("Failed to capture stderr")?;
+        let status = Arc::new(Mutex::new(CommandStatus::Running));
+        let output = Arc::new(Mutex::new(String::new()));
+        let error = Arc::new(Mutex::new(String::new()));
 
-        let is_terminated = Arc::new(AtomicBool::new(false));
+        let status_clone = Arc::clone(&status);
+        let output_clone = Arc::clone(&output);
+        let error_clone = Arc::clone(&error);
+        let child_clone = Arc::clone(&child);
 
-        // stdout
-        let is_terminated_clone = Arc::clone(&is_terminated);
-        tokio::spawn(async move {
-            Self::read_stream(stdout, output_sender, is_terminated_clone).await;
-        });
-        // stderr
-        let is_terminated_clone = Arc::clone(&is_terminated);
-        tokio::spawn(async move {
-            Self::read_stream(stderr, error_sender, is_terminated_clone).await;
-        });
-        // TODO: stdin
-        let is_terminated_clone = Arc::clone(&is_terminated);
-        let input_ready = Arc::new(Notify::new());
-        let input_ready_clone = Arc::clone(&input_ready);
-        tokio::spawn(async move {
-            while !is_terminated_clone.load(Ordering::Relaxed) {
-                tokio::select! {
-                    Some(input) = input_receiver.recv() => {
-                        if let Err(e) = stdin.write_all(input.as_bytes()).await {
-                            eprintln!("Error writing to stdin: {}", e);
-                            continue;
-                        }
-                        if let Err(e) = stdin.flush().await {
-                            eprintln!("Error flushing stdin: {}", e);
-                            continue;
-                        }
+        thread::spawn(move || {
+            let mut stdout_reader = std::io::BufReader::new(stdout);
+            let mut stderr_reader = std::io::BufReader::new(stderr);
+
+            loop {
+                use std::io::BufRead;
+
+                let mut stdout_line = String::new();
+                let mut stderr_line = String::new();
+
+                match stdout_reader.read_line(&mut stdout_line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        stdout_sender.send(stdout_line.clone()).unwrap();
+                        output_clone.lock().unwrap().push_str(&stdout_line);
                     }
-                    _ = input_ready_clone.notified() => {
-                        // Do nothing, just wake up to check termination flag
+                    Err(_) => break,
+                }
+
+                match stderr_reader.read_line(&mut stderr_line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        stderr_sender.send(stderr_line.clone()).unwrap();
+                        error_clone.lock().unwrap().push_str(&stderr_line);
+                    }
+                    Err(_) => break,
+                }
+
+                match child_clone.lock().unwrap().try_wait() {
+                    Ok(Some(status)) => {
+                        let mut command_status = status_clone.lock().unwrap();
+                        *command_status = if status.success() {
+                            CommandStatus::ExitedWithOkStatus
+                        } else {
+                            CommandStatus::ExceptionalTerminated
+                        };
+                        break;
+                    }
+                    Ok(None) => continue,
+                    Err(_) => {
+                        let mut command_status = status_clone.lock().unwrap();
+                        *command_status = CommandStatus::ExceptionalTerminated;
+                        break;
                     }
                 }
             }
         });
 
-        Ok(CommandRunner {
+        Ok(CLI {
+            stdout_receiver,
+            stderr_receiver,
             child,
-            output_receiver,
-            error_receiver,
-            input_sender,
-            is_terminated,
-            input_ready,
+            status,
+            output,
+            error,
         })
     }
 
-    async fn read_stream(
-        stream: impl tokio::io::AsyncRead + Unpin,
-        sender: UnboundedSender<String>,
-        is_terminated: Arc<AtomicBool>,
-    ) {
-        let mut reader = BufReader::new(stream);
-        let mut buffer = [0; 1024];
-        let mut leftover = Vec::new();
-
-        while !is_terminated.load(Ordering::Relaxed) {
-            match reader.read(&mut buffer).await {
-                Ok(0) => break, // EOF
-                Ok(n) => {
-                    leftover.extend_from_slice(&buffer[..n]);
-
-                    // 查找并处理完整的行
-                    while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
-                        let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
-                        let (decoded, _, _) = GB18030.decode(&line);
-                        let _ = sender.send(decoded.trim().into());
-                    }
-                }
-                Err(_) => break,
-            }
-        }
+    pub fn terminate(&self) -> std::io::Result<()> {
+        self.child.lock().unwrap().kill()
     }
 
-    pub async fn input(&self, input: &str) -> Result<()> {
-        self.input_sender
-            .send(input.to_string())
-            .context("Failed to send input")?;
-        self.input_ready.notify_one();
-        Ok(())
+    pub fn get_status(&self) -> CommandStatus {
+        *self.status.lock().unwrap()
     }
 
-    pub async fn terminate(&mut self) {
-        self.is_terminated.store(true, Ordering::Relaxed);
-        let _ = self.child.kill().await;
-        let _ = self.child.wait().await;
+    pub fn get_one_output(&self) -> Option<String> {
+        self.stdout_receiver.try_iter().next()
     }
 
-    pub async fn get_status(&mut self) -> CommandStatus {
-        match self.child.try_wait() {
-            Ok(Some(status)) => {
-                if status.success() {
-                    CommandStatus::ExitedWithOkStatus
-                } else {
-                    CommandStatus::ExceptionalTerminated
-                }
-            }
-            Ok(None) => {
-                if self.is_ready_for_input().await {
-                    CommandStatus::WaitingInput
-                } else {
-                    CommandStatus::Running
-                }
-            }
-            Err(_) => CommandStatus::ExceptionalTerminated,
-        }
-    }
-
-    async fn is_ready_for_input(&self) -> bool {
-        // TODO: 这里需要一个更复杂的逻辑来检测是否准备好接受输入
-        // 为了简化,我们假设总是准备好接受输入
-        // true
-        false
-
-        // the sync version
-        // if self.child.stdin.is_none() {
-        //     return false;
-        // }
-
-        // let mut events = Events::with_capacity(1);
-        // match self
-        //     .poll
-        //     .poll(&mut events, Some(std::time::Duration::from_millis(0)))
-        // {
-        //     Ok(_) => {
-        //         for event in events.iter() {
-        //             if event.token() == STDIN && event.is_writable() {
-        //                 return true;
-        //             }
-        //         }
-        //         false
-        //     }
-        //     Err(_) => false,
-        // }
-    }
-
-    pub async fn get_output(&mut self) -> Option<String> {
-        self.output_receiver.recv().await
-    }
-
-    pub async fn get_error(&mut self) -> Option<String> {
-        self.error_receiver.recv().await
+    pub fn get_one_error(&self) -> Option<String> {
+        self.stderr_receiver.try_iter().next()
     }
 }

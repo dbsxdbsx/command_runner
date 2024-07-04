@@ -20,6 +20,25 @@
 8. **Unified Struct and Easy-to-Use Interface**: Simplify CLI operations with a single, easy-to-use struct and interfaces like `get_status()`, `get_output()`, `get_error()`, and `input("send your input when the command asks for")`.
 9. **Non-Blocking I/O**: Perform all I/O operations asynchronously, preventing blocking and enhancing responsiveness.
 
+## Exported Interfaces
+
+`fn run(command: &str) -> Result<Self>`
+`fn terminate(&mut self)`
+`fn get_status(&mut self) -> CommandStatus`
+`fn input(&self, input: &str) -> Result<()>`
+`fn get_output(&self) -> Option<String>`
+`fn get_error(&self) -> Option<String>`
+
+## Command Status
+```rust
+pub enum CommandStatus {
+    Running,               // the command is valid initialized and is running
+    ExitedWithOkStatus,    // exit with success
+    ExceptionalTerminated, // exit with failure  TODO: furthur split into `ForceTerminated` and `ExitedPanic`?
+    WaitingInput,          // the command reqeust input when it is running
+}
+```
+
 ## Installation
 
 Add the following to your `Cargo.toml`:

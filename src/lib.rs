@@ -64,7 +64,7 @@ impl CommandRunner {
         tokio::spawn(async move {
             Self::read_stream(stderr, error_sender, is_terminated_clone).await;
         });
-        // stdin
+        // TODO: stdin
         let is_terminated_clone = Arc::clone(&is_terminated);
         let input_ready = Arc::new(Notify::new());
         let input_ready_clone = Arc::clone(&input_ready);
@@ -187,11 +187,11 @@ impl CommandRunner {
         // }
     }
 
-    pub async fn get_one_output(&mut self) -> Option<String> {
+    pub async fn get_output(&mut self) -> Option<String> {
         self.output_receiver.recv().await
     }
 
-    pub async fn get_one_error(&mut self) -> Option<String> {
+    pub async fn get_error(&mut self) -> Option<String> {
         self.error_receiver.recv().await
     }
 }

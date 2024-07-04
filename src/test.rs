@@ -19,7 +19,7 @@ mod tests {
         // 等待一段时间以确保命令开始执行
         sleep(Duration::from_millis(100)).await;
         // 获取一些初始输出
-        let initial_output = executor.get_one_output().await;
+        let initial_output = executor.get_output().await;
         assert!(
             initial_output.is_some(),
             "There should be some initial output"
@@ -52,11 +52,11 @@ mod tests {
         loop {
             match executor.get_status().await {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_output().await {
+                    if let Some(output) = executor.get_output().await {
                         output_count += output.len();
                         println!("Current Output: {}", output);
                     }
-                    assert!(executor.get_one_error().await.is_none());
+                    assert!(executor.get_error().await.is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Built-in Command completed successfully");
@@ -90,11 +90,11 @@ mod tests {
                 CommandStatus::Running => {
                     // 收集输出
                     // 由于python较慢(故意延迟),所以会捕获许多`None`
-                    if let Some(output) = executor.get_one_output().await {
+                    if let Some(output) = executor.get_output().await {
                         all_output.push(output);
                     }
                     // 检查输出错误
-                    assert!(executor.get_one_error().await.is_none());
+                    assert!(executor.get_error().await.is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Custom application command execution completed");
@@ -135,10 +135,10 @@ mod tests {
         loop {
             match executor.get_status().await {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_output().await {
+                    if let Some(output) = executor.get_output().await {
                         outputs.push(output);
                     }
-                    if let Some(error) = executor.get_one_error().await {
+                    if let Some(error) = executor.get_error().await {
                         outputs.push(error);
                     }
                 }
@@ -172,10 +172,10 @@ mod tests {
         loop {
             match executor.get_status().await {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_output().await {
+                    if let Some(output) = executor.get_output().await {
                         output_lines.push(output);
                     }
-                    if let Some(error) = executor.get_one_error().await {
+                    if let Some(error) = executor.get_error().await {
                         panic!("测试中出现错误: {}", error);
                     }
                 }

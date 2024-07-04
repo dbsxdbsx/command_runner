@@ -17,7 +17,7 @@
 5. **Cross-Platform Support**: Consistent functionality across Linux, macOS, Windows, and mobile platforms like Android.
 6. **Efficient Concurrency with Green Threads**: Use lightweight green threads for efficient concurrent execution without OS thread overhead, integrating smoothly without explicit runtime usage.
 7. **no_std Compatibility**: Operate in environments without the standard library, enhancing versatility.
-8. **Unified Struct and Easy-to-Use Interface**: Simplify CLI operations with a single, easy-to-use struct and interfaces like `get_status()`, `get_output()`, `get_error()`, and `input("user input")`.
+8. **Unified Struct and Easy-to-Use Interface**: Simplify CLI operations with a single, easy-to-use struct and interfaces like `get_status()`, `get_output()`, `get_error()`, and `input("send your input when the command asks for")`.
 9. **Non-Blocking I/O**: Perform all I/O operations asynchronously, preventing blocking and enhancing responsiveness.
 
 ## Installation

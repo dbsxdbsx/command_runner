@@ -17,7 +17,7 @@
 5. **Cross-Platform Support**: Function consistently across Linux, macOS, Windows, and mobile platforms like Android.
 6. **Efficient Concurrency with Green Threads**: Utilize lightweight green threads for efficient concurrent execution without the overhead of OS thread creation. This feature integrates smoothly without requiring explicit runtime usage, offering flexibility and runtime-agnostic concurrency.
 7. **no_std Compatibility**: Operate in environments without the standard library, enhancing versatility across various contexts.
-8. **Simplified Command Line Interface**: Streamline CLI operations in Rust applications with an easy-to-use, feature-rich crate.
+8. **Simplified Command Line Interface**: Streamline CLI operations in Rust applications with  easy-to-use interfaces, like `get_status()`, `get_output()`, `get_error()` and `input("user input")`, etc.
 
 ## Installation
 

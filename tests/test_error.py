@@ -2,6 +2,7 @@ import sys
 
 
 def main():
+    print("start")
     # Attempt to execute an operation that might raise an exception
     try:
         result = 10 / 0 # Intentionally raise an exception

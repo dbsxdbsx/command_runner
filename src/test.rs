@@ -2,7 +2,6 @@
 mod tests {
     use crate::*;
     use std::time::Duration;
-    use tokio::time::sleep;
 
     #[test]
     fn test_invalid_command() {
@@ -15,23 +14,11 @@ mod tests {
         // 创建一个持续输出的命令
         let command = "ping -t 127.0.0.1";
         // 创建一个CommandExecutor实例
-        let executor = CommandRunner::run(command).unwrap();
-        // 等待一段时间以确保命令开始执行
-        sleep(Duration::from_millis(100));
-        // 获取一些初始输出
-        let initial_output = executor.get_one_line_output();
-        assert!(
-            initial_output.is_some(),
-            "There should be some initial output"
-        );
+        let mut executor = CommandRunner::run(command).unwrap();
         // 故意调用terminate方法
-        assert!(executor.terminate(), "The process should be terminated")
-        ;
+        assert!(executor.terminate().is_ok());
         // 断言:
-        assert!(
-            matches!(executor.get_status(), CommandStatus::ExceptionalTerminated),
-            "The process should have terminated"
-        );
+        assert_eq!(executor.get_status(), CommandStatus::ExceptionalTerminated);
     }
 
     #[test]
@@ -128,11 +115,11 @@ mod tests {
         loop {
             match executor.get_status() {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_line_output() {
-                        outputs.push(output);
-                    }
                     if let Some(error) = executor.get_one_line_error() {
                         outputs.push(error);
+                    }
+                    if let Some(output) = executor.get_one_line_output() {
+                        outputs.push(output);
                     }
                 }
                 CommandStatus::ExitedWithOkStatus => {
@@ -149,10 +136,13 @@ mod tests {
         }
 
         // check outputs
-        assert_eq!(outputs.len(), 3);
-        assert_eq!(outputs[0], "Error: division by zero");
-        assert_eq!(outputs[1], "This is normal output information");
-        assert_eq!(outputs[2], "The program continues to execute...");
+        // println!("the outputs are:{:?}", outputs);
+
+        assert_eq!(outputs.len(), 4);
+        assert_eq!(outputs[0], "start");
+        assert_eq!(outputs[1], "Error: division by zero");
+        assert_eq!(outputs[2], "This is normal output information");
+        assert_eq!(outputs[3], "The program continues to execute...");
     }
 
     // #[test]

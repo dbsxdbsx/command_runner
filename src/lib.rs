@@ -12,9 +12,11 @@ pub struct CommandRunner {
     stderr_receiver: Receiver<String>,
     child: Arc<Mutex<Child>>,
     status: Arc<Mutex<CommandStatus>>,
+    is_terminated: Arc<AtomicBool>,
+    thread_handle: Option<thread::JoinHandle<()>>,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CommandStatus {
     Running,
     ExitedWithOkStatus,
@@ -52,27 +54,31 @@ impl CommandRunner {
         let child_clone = Arc::clone(&child);
         let is_terminated_clone = Arc::clone(&is_terminated);
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             let mut stdout_reader = BufReader::new(stdout);
             let mut stderr_reader = BufReader::new(stderr);
             let mut stdout_buffer = [0; 1024];
             let mut stderr_buffer = [0; 1024];
 
             loop {
+                if is_terminated_clone.load(Ordering::Relaxed) {
+                    break;
+                }
+
                 let mut stdout_read = 0;
                 let mut stderr_read = 0;
-
-                if let Ok(n) = stdout_reader.read(&mut stdout_buffer) {
-                    stdout_read = n;
-                    if n > 0 {
-                        process_stream(&stdout_sender, &mut stdout_buffer[..n]);
-                    }
-                }
 
                 if let Ok(n) = stderr_reader.read(&mut stderr_buffer) {
                     stderr_read = n;
                     if n > 0 {
                         process_stream(&stderr_sender, &mut stderr_buffer[..n]);
+                    }
+                }
+
+                if let Ok(n) = stdout_reader.read(&mut stdout_buffer) {
+                    stdout_read = n;
+                    if n > 0 {
+                        process_stream(&stdout_sender, &mut stdout_buffer[..n]);
                     }
                 }
 
@@ -105,11 +111,27 @@ impl CommandRunner {
             stderr_receiver,
             child,
             status,
+            is_terminated,
+            thread_handle: Some(handle),
         })
     }
 
-    pub fn terminate(&self) -> std::io::Result<()> {
-        self.child.lock().unwrap().kill()
+    pub fn terminate(&mut self) -> std::io::Result<()> {
+        // set status
+        self.is_terminated.store(true, Ordering::Relaxed);
+        let mut command_status = self.status.lock().unwrap();
+        *command_status = CommandStatus::ExceptionalTerminated;
+
+        // wait for thread to exit
+        if let Some(handle) = self.thread_handle.take() {
+            handle.join().unwrap();
+        }
+
+        // send terminate signal to child process
+        let _ = self.child.lock().unwrap().kill()?;
+        let _ = self.child.lock().unwrap().wait()?;
+
+        Ok(())
     }
 
     pub fn get_status(&self) -> CommandStatus {
@@ -133,6 +155,6 @@ fn process_stream(sender: &Sender<String>, buffer: &[u8]) {
     while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
         let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
         let (decoded, _, _) = GB18030.decode(&line);
-        sender.send(decoded.into_owned()).unwrap();
+        sender.send(decoded.trim().to_owned()).unwrap();
     }
 }

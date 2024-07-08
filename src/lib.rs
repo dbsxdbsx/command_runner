@@ -7,15 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-pub struct CommandRunner {
-    stdout_receiver: Receiver<String>,
-    stderr_receiver: Receiver<String>,
-    child: Arc<Mutex<Child>>,
-    status: Arc<Mutex<CommandStatus>>,
-    is_terminated: Arc<AtomicBool>,
-    thread_handle: Option<thread::JoinHandle<()>>,
-}
-
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CommandStatus {
     Running,
@@ -24,10 +15,70 @@ pub enum CommandStatus {
     WaitingInput,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum OutputType {
+    StdOut,
+    StdErr,
+}
+
+impl Output {
+    pub fn get_type(&self) -> OutputType {
+        match self {
+            Output::StdOut(_) => OutputType::StdOut,
+            Output::StdErr(_) => OutputType::StdErr,
+        }
+    }
+}
+
+use std::fmt;
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Output {
+    StdOut(String),
+    StdErr(String),
+}
+
+impl Output {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Output::StdOut(s) => s.as_str(),
+            Output::StdErr(s) => s.as_str(),
+        }
+    }
+}
+
+impl PartialEq<&str> for Output {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl PartialEq<String> for Output {
+    fn eq(&self, other: &String) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl fmt::Display for Output {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Output::StdOut(s) => write!(f, "StdOut: {}", s),
+            Output::StdErr(s) => write!(f, "StdErr: {}", s),
+        }
+    }
+}
+
+pub struct CommandRunner {
+    output_receiver: Receiver<Output>,
+    child: Arc<Mutex<Child>>,
+    status: Arc<Mutex<CommandStatus>>,
+    is_terminated: Arc<AtomicBool>,
+    thread_handle: Option<thread::JoinHandle<()>>,
+}
+
 impl CommandRunner {
     pub fn run(command: &str) -> std::io::Result<Self> {
-        let (stdout_sender, stdout_receiver) = unbounded();
-        let (stderr_sender, stderr_receiver) = unbounded();
+        let (output_sender, output_receiver) = unbounded();
 
         let parts: Vec<&str> = command.split_whitespace().collect();
         let (cmd, args) = if parts.len() > 1 {
@@ -71,14 +122,14 @@ impl CommandRunner {
                 if let Ok(n) = stderr_reader.read(&mut stderr_buffer) {
                     stderr_read = n;
                     if n > 0 {
-                        process_stream(&stderr_sender, &mut stderr_buffer[..n]);
+                        process_stream(&output_sender, &mut stderr_buffer[..n], true);
                     }
                 }
 
                 if let Ok(n) = stdout_reader.read(&mut stdout_buffer) {
                     stdout_read = n;
                     if n > 0 {
-                        process_stream(&stdout_sender, &mut stdout_buffer[..n]);
+                        process_stream(&output_sender, &mut stdout_buffer[..n], false);
                     }
                 }
 
@@ -107,8 +158,7 @@ impl CommandRunner {
         });
 
         Ok(CommandRunner {
-            stdout_receiver,
-            stderr_receiver,
+            output_receiver,
             child,
             status,
             is_terminated,
@@ -138,16 +188,12 @@ impl CommandRunner {
         *self.status.lock().unwrap()
     }
 
-    pub fn get_one_line_output(&self) -> Option<String> {
-        self.stdout_receiver.try_iter().next()
-    }
-
-    pub fn get_one_line_error(&self) -> Option<String> {
-        self.stderr_receiver.try_iter().next()
+    pub fn get_one_line_output(&self) -> Option<Output> {
+        self.output_receiver.try_iter().next()
     }
 }
 
-fn process_stream(sender: &Sender<String>, buffer: &[u8]) {
+fn process_stream(sender: &Sender<Output>, buffer: &[u8], is_stderr: bool) {
     let mut leftover = Vec::new();
     leftover.extend_from_slice(buffer);
 
@@ -155,6 +201,11 @@ fn process_stream(sender: &Sender<String>, buffer: &[u8]) {
     while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
         let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
         let (decoded, _, _) = GB18030.decode(&line);
-        sender.send(decoded.trim().to_owned()).unwrap();
+        let output = if is_stderr {
+            Output::StdErr(decoded.trim().to_owned())
+        } else {
+            Output::StdOut(decoded.trim().to_owned())
+        };
+        sender.send(output).unwrap();
     }
 }

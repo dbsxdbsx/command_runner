@@ -37,13 +37,11 @@ mod tests {
             match executor.get_status() {
                 CommandStatus::Running => {
                     if let Some(output) = executor.get_one_line_output() {
-                        output_count += output.len();
-                        println!("Current Output: {}", output);
+                        output_count += 1;
+                        assert_eq!(output.get_type(), OutputType::StdOut);
                     }
-                    assert!(executor.get_one_line_error().is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
-                    println!("Built-in Command completed successfully");
                     break;
                 }
                 CommandStatus::WaitingInput => {
@@ -73,10 +71,9 @@ mod tests {
                     // 收集输出
                     // 由于python较慢(故意延迟),所以会捕获许多`None`
                     if let Some(output) = executor.get_one_line_output() {
+                        assert_eq!(output.get_type(), OutputType::StdOut);
                         all_output.push(output);
                     }
-                    // 检查输出错误
-                    assert!(executor.get_one_line_error().is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Custom application command execution completed");
@@ -98,7 +95,7 @@ mod tests {
         );
         for (i, line) in all_output.iter().enumerate() {
             assert_eq!(
-                line.trim(),
+                line,
                 &(i + 1).to_string(),
                 "Line {} should be '{}'",
                 i + 1,
@@ -115,9 +112,6 @@ mod tests {
         loop {
             match executor.get_status() {
                 CommandStatus::Running => {
-                    if let Some(error) = executor.get_one_line_error() {
-                        outputs.push(error);
-                    }
                     if let Some(output) = executor.get_one_line_output() {
                         outputs.push(output);
                     }

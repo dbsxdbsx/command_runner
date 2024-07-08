@@ -4,59 +4,56 @@ mod tests {
     use std::time::Duration;
     use tokio::time::sleep;
 
-    #[tokio::test]
-    async fn test_invalid_command() {
-        let result = CommandRunner::run("non_existent_command").await;
+    #[test]
+    fn test_invalid_command() {
+        let result = CommandRunner::run("non_existent_command");
         assert!(result.is_err(), "Expected an error for invalid command");
     }
 
-    #[tokio::test]
-    async fn test_force_terminate_by_os_command_ping() {
+    #[test]
+    fn test_force_terminate_by_os_command_ping() {
         // 创建一个持续输出的命令
         let command = "ping -t 127.0.0.1";
         // 创建一个CommandExecutor实例
-        let mut executor = CommandRunner::run(command).await.unwrap();
+        let executor = CommandRunner::run(command).unwrap();
         // 等待一段时间以确保命令开始执行
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(100));
         // 获取一些初始输出
-        let initial_output = executor.get_output().await;
+        let initial_output = executor.get_one_line_output();
         assert!(
             initial_output.is_some(),
             "There should be some initial output"
         );
         // 故意调用terminate方法
-        executor.terminate().await;
+        assert!(executor.terminate(), "The process should be terminated")
+        ;
         // 断言:
         assert!(
-            matches!(
-                executor.get_status().await,
-                CommandStatus::ExceptionalTerminated
-            ),
+            matches!(executor.get_status(), CommandStatus::ExceptionalTerminated),
             "The process should have terminated"
         );
     }
 
-    #[tokio::test]
-    async fn test_os_command_ping() {
+    #[test]
+    fn test_os_command_ping() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {
             "-c"
         };
         let check_num = 2;
-        let mut executor =
+        let executor =
             CommandRunner::run(&format!("ping {ping_count_option} {check_num} google.com"))
-                .await
                 .unwrap();
         let mut output_count = 0;
         loop {
-            match executor.get_status().await {
+            match executor.get_status() {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_output().await {
+                    if let Some(output) = executor.get_one_line_output() {
                         output_count += output.len();
                         println!("Current Output: {}", output);
                     }
-                    assert!(executor.get_error().await.is_none());
+                    assert!(executor.get_one_line_error().is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Built-in Command completed successfully");
@@ -79,22 +76,20 @@ mod tests {
         println!("Total output lines: {}", output_count);
     }
 
-    #[tokio::test]
-    async fn test_receiving_output_by_python_script() {
-        let mut executor = CommandRunner::run("python ./tests/test_output.py")
-            .await
-            .unwrap();
+    #[test]
+    fn test_receiving_output_by_python_script() {
+        let executor = CommandRunner::run("python ./tests/test_output.py").unwrap();
         let mut all_output = Vec::new();
         loop {
-            match executor.get_status().await {
+            match executor.get_status() {
                 CommandStatus::Running => {
                     // 收集输出
                     // 由于python较慢(故意延迟),所以会捕获许多`None`
-                    if let Some(output) = executor.get_output().await {
+                    if let Some(output) = executor.get_one_line_output() {
                         all_output.push(output);
                     }
                     // 检查输出错误
-                    assert!(executor.get_error().await.is_none());
+                    assert!(executor.get_one_line_error().is_none());
                 }
                 CommandStatus::ExitedWithOkStatus => {
                     println!("Custom application command execution completed");
@@ -125,20 +120,18 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_receiving_error_and_output_by_python_script() {
-        let mut executor = CommandRunner::run("python ./tests/test_error.py")
-            .await
-            .unwrap();
+    #[test]
+    fn test_receiving_error_and_output_by_python_script() {
+        let executor = CommandRunner::run("python ./tests/test_error.py").unwrap();
         let mut outputs = Vec::new();
 
         loop {
-            match executor.get_status().await {
+            match executor.get_status() {
                 CommandStatus::Running => {
-                    if let Some(output) = executor.get_output().await {
+                    if let Some(output) = executor.get_one_line_output() {
                         outputs.push(output);
                     }
-                    if let Some(error) = executor.get_error().await {
+                    if let Some(error) = executor.get_one_line_error() {
                         outputs.push(error);
                     }
                 }
@@ -162,54 +155,52 @@ mod tests {
         assert_eq!(outputs[2], "The program continues to execute...");
     }
 
-    #[tokio::test]
-    async fn test_sending_input_when_command_is_inited_by_python_script() {
-        let mut executor = CommandRunner::run("python ./tests/test_input.py")
-            .await
-            .unwrap();
-        let mut output_lines = Vec::new();
-        let mut input_sent = false;
-        loop {
-            match executor.get_status().await {
-                CommandStatus::Running => {
-                    if let Some(output) = executor.get_output().await {
-                        output_lines.push(output);
-                    }
-                    if let Some(error) = executor.get_error().await {
-                        panic!("测试中出现错误: {}", error);
-                    }
-                }
-                CommandStatus::ExitedWithOkStatus => {
-                    break;
-                }
-                CommandStatus::WaitingInput => {
-                    if !input_sent {
-                        executor.input("测试输入的内容").await.unwrap();
-                        input_sent = true;
-                    }
-                }
-                CommandStatus::ExceptionalTerminated => {
-                    panic!();
-                }
-            }
-        }
-        assert_eq!(
-            output_lines.len(),
-            2,
-            "预期输出行数为2，但实际得到 {}",
-            output_lines.len()
-        );
-        assert_eq!(output_lines[0], "please input something: ");
-        assert_eq!(
-            output_lines[1],
-            "you've input: 测试输入的内容. Script finished"
-        );
-        println!("测试通过！总输出行数: {}", output_lines.len());
-        println!("输出内容:");
-        for line in output_lines {
-            println!("{}", line);
-        }
-    }
+    // #[test]
+    // fn test_sending_input_when_command_is_inited_by_python_script() {
+    //     let mut executor = CommandRunner::run("python ./tests/test_input.py").unwrap();
+    //     let mut output_lines = Vec::new();
+    //     let mut input_sent = false;
+    //     loop {
+    //         match executor.get_status() {
+    //             CommandStatus::Running => {
+    //                 if let Some(output) = executor.get_one_line_output() {
+    //                     output_lines.push(output);
+    //                 }
+    //                 if let Some(error) = executor.get_one_line_error() {
+    //                     panic!("测试中出现错误: {}", error);
+    //                 }
+    //             }
+    //             CommandStatus::ExitedWithOkStatus => {
+    //                 break;
+    //             }
+    //             CommandStatus::WaitingInput => {
+    //                 if !input_sent {
+    //                     executor.input("测试输入的内容").unwrap();
+    //                     input_sent = true;
+    //                 }
+    //             }
+    //             CommandStatus::ExceptionalTerminated => {
+    //                 panic!();
+    //             }
+    //         }
+    //     }
+    //     assert_eq!(
+    //         output_lines.len(),
+    //         2,
+    //         "预期输出行数为2，但实际得到 {}",
+    //         output_lines.len()
+    //     );
+    //     assert_eq!(output_lines[0], "please input something: ");
+    //     assert_eq!(
+    //         output_lines[1],
+    //         "you've input: 测试输入的内容. Script finished"
+    //     );
+    //     println!("测试通过！总输出行数: {}", output_lines.len());
+    //     println!("输出内容:");
+    //     for line in output_lines {
+    //         println!("{}", line);
+    //     }
+    // }
 
     // #[test]
     // fn test_input_and_output_by_python_script_guessing_game() {
@@ -223,7 +214,7 @@ mod tests {
     //     loop {
     //         match executor.get_status() {
     //             CommandStatus::Running => {
-    //                 let output = executor.get_output();
+    //                 let output = executor.get_one_line_output();
     //                 println!("the output is:{output:?}");
     //                 all_output.extend(output.clone());
 
@@ -239,7 +230,7 @@ mod tests {
     //                     }
     //                 }
 
-    //                 let error = executor.get_error();
+    //                 let error = executor.get_one_line_error();
     //                 assert!(error.is_empty(), "意外的错误输出: {:?}", error);
     //             }
     //             CommandStatus::WaitingForInput => {

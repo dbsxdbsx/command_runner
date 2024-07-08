@@ -1,15 +1,17 @@
-use crossbeam::channel::{unbounded, Receiver, Sender, TryRecvError};
+mod test;
+use crossbeam::channel::{unbounded, Receiver, Sender};
+use encoding_rs::GB18030;
+use std::io::{BufReader, Read};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-pub struct CLI {
+pub struct CommandRunner {
     stdout_receiver: Receiver<String>,
     stderr_receiver: Receiver<String>,
     child: Arc<Mutex<Child>>,
     status: Arc<Mutex<CommandStatus>>,
-    output: Arc<Mutex<String>>,
-    error: Arc<Mutex<String>>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -17,9 +19,10 @@ pub enum CommandStatus {
     Running,
     ExitedWithOkStatus,
     ExceptionalTerminated,
+    WaitingInput,
 }
 
-impl CLI {
+impl CommandRunner {
     pub fn run(command: &str) -> std::io::Result<Self> {
         let (stdout_sender, stdout_receiver) = unbounded();
         let (stderr_sender, stderr_receiver) = unbounded();
@@ -43,69 +46,65 @@ impl CLI {
         let stderr = child.lock().unwrap().stderr.take().unwrap();
 
         let status = Arc::new(Mutex::new(CommandStatus::Running));
-        let output = Arc::new(Mutex::new(String::new()));
-        let error = Arc::new(Mutex::new(String::new()));
+        let is_terminated = Arc::new(AtomicBool::new(false));
 
         let status_clone = Arc::clone(&status);
-        let output_clone = Arc::clone(&output);
-        let error_clone = Arc::clone(&error);
         let child_clone = Arc::clone(&child);
+        let is_terminated_clone = Arc::clone(&is_terminated);
 
         thread::spawn(move || {
-            let mut stdout_reader = std::io::BufReader::new(stdout);
-            let mut stderr_reader = std::io::BufReader::new(stderr);
+            let mut stdout_reader = BufReader::new(stdout);
+            let mut stderr_reader = BufReader::new(stderr);
+            let mut stdout_buffer = [0; 1024];
+            let mut stderr_buffer = [0; 1024];
 
             loop {
-                use std::io::BufRead;
+                let mut stdout_read = 0;
+                let mut stderr_read = 0;
 
-                let mut stdout_line = String::new();
-                let mut stderr_line = String::new();
-
-                match stdout_reader.read_line(&mut stdout_line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        stdout_sender.send(stdout_line.clone()).unwrap();
-                        output_clone.lock().unwrap().push_str(&stdout_line);
+                if let Ok(n) = stdout_reader.read(&mut stdout_buffer) {
+                    stdout_read = n;
+                    if n > 0 {
+                        process_stream(&stdout_sender, &mut stdout_buffer[..n]);
                     }
-                    Err(_) => break,
                 }
 
-                match stderr_reader.read_line(&mut stderr_line) {
-                    Ok(0) => break,
-                    Ok(_) => {
-                        stderr_sender.send(stderr_line.clone()).unwrap();
-                        error_clone.lock().unwrap().push_str(&stderr_line);
+                if let Ok(n) = stderr_reader.read(&mut stderr_buffer) {
+                    stderr_read = n;
+                    if n > 0 {
+                        process_stream(&stderr_sender, &mut stderr_buffer[..n]);
                     }
-                    Err(_) => break,
                 }
 
-                match child_clone.lock().unwrap().try_wait() {
-                    Ok(Some(status)) => {
-                        let mut command_status = status_clone.lock().unwrap();
-                        *command_status = if status.success() {
-                            CommandStatus::ExitedWithOkStatus
-                        } else {
-                            CommandStatus::ExceptionalTerminated
-                        };
-                        break;
-                    }
-                    Ok(None) => continue,
-                    Err(_) => {
-                        let mut command_status = status_clone.lock().unwrap();
-                        *command_status = CommandStatus::ExceptionalTerminated;
-                        break;
+                if stdout_read == 0 && stderr_read == 0 {
+                    match child_clone.lock().unwrap().try_wait() {
+                        Ok(Some(status)) => {
+                            let mut command_status = status_clone.lock().unwrap();
+                            *command_status = if status.success() {
+                                CommandStatus::ExitedWithOkStatus
+                            } else {
+                                CommandStatus::ExceptionalTerminated
+                            };
+                            is_terminated_clone.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        Ok(None) => continue,
+                        Err(_) => {
+                            let mut command_status = status_clone.lock().unwrap();
+                            *command_status = CommandStatus::ExceptionalTerminated;
+                            is_terminated_clone.store(true, Ordering::Relaxed);
+                            break;
+                        }
                     }
                 }
             }
         });
 
-        Ok(CLI {
+        Ok(CommandRunner {
             stdout_receiver,
             stderr_receiver,
             child,
             status,
-            output,
-            error,
         })
     }
 
@@ -117,11 +116,23 @@ impl CLI {
         *self.status.lock().unwrap()
     }
 
-    pub fn get_one_output(&self) -> Option<String> {
+    pub fn get_one_line_output(&self) -> Option<String> {
         self.stdout_receiver.try_iter().next()
     }
 
-    pub fn get_one_error(&self) -> Option<String> {
+    pub fn get_one_line_error(&self) -> Option<String> {
         self.stderr_receiver.try_iter().next()
+    }
+}
+
+fn process_stream(sender: &Sender<String>, buffer: &[u8]) {
+    let mut leftover = Vec::new();
+    leftover.extend_from_slice(buffer);
+
+    // find and process complete lines
+    while let Some(newline_pos) = leftover.iter().position(|&b| b == b'\n') {
+        let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
+        let (decoded, _, _) = GB18030.decode(&line);
+        sender.send(decoded.into_owned()).unwrap();
     }
 }

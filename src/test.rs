@@ -1,7 +1,6 @@
 #[cfg(test)]
 mod tests {
     use crate::*;
-    use std::time::Duration;
 
     #[test]
     fn test_invalid_command() {
@@ -130,13 +129,13 @@ mod tests {
         }
 
         // check outputs
-        // println!("the outputs are:{:?}", outputs);
+        println!("the outputs are:{:?}", outputs);
 
         assert_eq!(outputs.len(), 4);
-        assert_eq!(outputs[0], "start");
-        assert_eq!(outputs[1], "Error: division by zero");
-        assert_eq!(outputs[2], "This is normal output information");
-        assert_eq!(outputs[3], "The program continues to execute...");
+        assert_eq!(outputs[0], "[1]:normal print.");
+        assert_eq!(outputs[1], "[2]:normal print.");
+        assert_eq!(outputs[2], "[3]:normal print.");
+        assert_eq!(outputs[3], "[4]:normal print.");
     }
 
     // #[test]

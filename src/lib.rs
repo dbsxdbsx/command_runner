@@ -1,11 +1,28 @@
 mod test;
 use crossbeam::channel::{unbounded, Receiver, Sender};
 use encoding_rs::GB18030;
-use std::io::{BufReader, Read};
+use std::io::Read;
+
+#[cfg(not(windows))]
+use mio::unix::pipe::Receiver as UnixReceiver;
+#[cfg(windows)]
+use mio::windows::NamedPipe;
+use std::os::windows::io::{IntoRawHandle, RawHandle};
+
+#[cfg(windows)]
+fn create_named_pipe<T: IntoRawHandle>(handle: T) -> std::io::Result<NamedPipe> {
+    use std::os::windows::io::FromRawHandle;
+
+    let raw_handle: RawHandle = handle.into_raw_handle();
+    unsafe { Ok(NamedPipe::from_raw_handle(raw_handle)) }
+}
+
+use mio::{Events, Interest, Poll, Token};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CommandStatus {
@@ -98,6 +115,16 @@ impl CommandRunner {
         let stdout = child.lock().unwrap().stdout.take().unwrap();
         let stderr = child.lock().unwrap().stderr.take().unwrap();
 
+        #[cfg(unix)]
+        let stdout_receiver = UnixReceiver::from(stdout);
+        #[cfg(unix)]
+        let stderr_receiver = UnixReceiver::from(stderr);
+
+        #[cfg(windows)]
+        let mut stdout_receiver = create_named_pipe(stdout)?;
+        #[cfg(windows)]
+        let mut stderr_receiver = create_named_pipe(stderr)?;
+
         let status = Arc::new(Mutex::new(CommandStatus::Running));
         let is_terminated = Arc::new(AtomicBool::new(false));
 
@@ -106,8 +133,19 @@ impl CommandRunner {
         let is_terminated_clone = Arc::clone(&is_terminated);
 
         let handle = thread::spawn(move || {
-            let mut stdout_reader = BufReader::new(stdout);
-            let mut stderr_reader = BufReader::new(stderr);
+            let mut poll = Poll::new().unwrap();
+            let mut events = Events::with_capacity(1024);
+
+            let stdout_token = Token(1);
+            let stderr_token = Token(2);
+
+            poll.registry()
+                .register(&mut stdout_receiver, stdout_token, Interest::READABLE)
+                .unwrap();
+            poll.registry()
+                .register(&mut stderr_receiver, stderr_token, Interest::READABLE)
+                .unwrap();
+
             let mut stdout_buffer = [0; 1024];
             let mut stderr_buffer = [0; 1024];
 
@@ -116,42 +154,46 @@ impl CommandRunner {
                     break;
                 }
 
-                let mut stdout_read = 0;
-                let mut stderr_read = 0;
+                poll.poll(&mut events, Some(Duration::from_millis(10)))
+                    .unwrap();
 
-                if let Ok(n) = stderr_reader.read(&mut stderr_buffer) {
-                    stderr_read = n;
-                    if n > 0 {
-                        process_stream(&output_sender, &mut stderr_buffer[..n], true);
+                for event in events.iter() {
+                    match event.token() {
+                        Token(1) => {
+                            if let Ok(n) = stdout_receiver.read(&mut stdout_buffer) {
+                                if n > 0 {
+                                    process_stream(&output_sender, &mut stdout_buffer[..n], false);
+                                }
+                            }
+                        }
+                        Token(2) => {
+                            if let Ok(n) = stderr_receiver.read(&mut stderr_buffer) {
+                                if n > 0 {
+                                    process_stream(&output_sender, &mut stderr_buffer[..n], true);
+                                }
+                            }
+                        }
+                        _ => unreachable!(),
                     }
                 }
 
-                if let Ok(n) = stdout_reader.read(&mut stdout_buffer) {
-                    stdout_read = n;
-                    if n > 0 {
-                        process_stream(&output_sender, &mut stdout_buffer[..n], false);
+                match child_clone.lock().unwrap().try_wait() {
+                    Ok(Some(status)) => {
+                        let mut command_status = status_clone.lock().unwrap();
+                        *command_status = if status.success() {
+                            CommandStatus::ExitedWithOkStatus
+                        } else {
+                            CommandStatus::ExceptionalTerminated
+                        };
+                        is_terminated_clone.store(true, Ordering::Relaxed);
+                        break;
                     }
-                }
-
-                if stdout_read == 0 && stderr_read == 0 {
-                    match child_clone.lock().unwrap().try_wait() {
-                        Ok(Some(status)) => {
-                            let mut command_status = status_clone.lock().unwrap();
-                            *command_status = if status.success() {
-                                CommandStatus::ExitedWithOkStatus
-                            } else {
-                                CommandStatus::ExceptionalTerminated
-                            };
-                            is_terminated_clone.store(true, Ordering::Relaxed);
-                            break;
-                        }
-                        Ok(None) => continue,
-                        Err(_) => {
-                            let mut command_status = status_clone.lock().unwrap();
-                            *command_status = CommandStatus::ExceptionalTerminated;
-                            is_terminated_clone.store(true, Ordering::Relaxed);
-                            break;
-                        }
+                    Ok(None) => continue,
+                    Err(_) => {
+                        let mut command_status = status_clone.lock().unwrap();
+                        *command_status = CommandStatus::ExceptionalTerminated;
+                        is_terminated_clone.store(true, Ordering::Relaxed);
+                        break;
                     }
                 }
             }
@@ -178,7 +220,7 @@ impl CommandRunner {
         }
 
         // send terminate signal to child process
-        let _ = self.child.lock().unwrap().kill()?;
+        self.child.lock().unwrap().kill()?;
         let _ = self.child.lock().unwrap().wait()?;
 
         Ok(())

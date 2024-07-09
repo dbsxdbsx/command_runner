@@ -93,13 +93,7 @@ mod tests {
             all_output.len()
         );
         for (i, line) in all_output.iter().enumerate() {
-            assert_eq!(
-                line,
-                &(i + 1).to_string(),
-                "Line {} should be '{}'",
-                i + 1,
-                i + 1
-            );
+            assert_eq!(line.as_str(), format!("{}", i + 1))
         }
     }
 
@@ -128,14 +122,17 @@ mod tests {
             }
         }
 
+        // 按时间戳排序输出
+        // outputs.sort_by_key(|output| output.timestamp);
+
         // check outputs
         println!("the outputs are:{:?}", outputs);
 
         assert_eq!(outputs.len(), 4);
-        assert_eq!(outputs[0], "[1]:normal print.");
-        assert_eq!(outputs[1], "[2]:normal print.");
-        assert_eq!(outputs[2], "[3]:normal print.");
-        assert_eq!(outputs[3], "[4]:normal print.");
+        assert_eq!(outputs[0].as_str(), "[1]:normal print.");
+        assert_eq!(outputs[1].as_str(), "[2]:error print.");
+        assert_eq!(outputs[2].as_str(), "[3]:normal print.");
+        assert_eq!(outputs[3].as_str(), "[4]:error print.");
     }
 
     // #[test]

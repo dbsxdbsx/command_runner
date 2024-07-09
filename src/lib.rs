@@ -21,8 +21,8 @@ use mio::{Events, Interest, Poll, Token};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::Duration;
+use std::{fmt, thread};
 
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum CommandStatus {
@@ -32,56 +32,49 @@ pub enum CommandStatus {
     WaitingInput,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum OutputType {
     StdOut,
     StdErr,
 }
-
-impl Output {
-    pub fn get_type(&self) -> OutputType {
+impl fmt::Display for OutputType {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Output::StdOut(_) => OutputType::StdOut,
-            Output::StdErr(_) => OutputType::StdErr,
+            OutputType::StdOut => write!(f, "stdout"),
+            OutputType::StdErr => write!(f, "stderr"),
         }
     }
 }
 
-use std::fmt;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum Output {
-    StdOut(String),
-    StdErr(String),
+#[derive(Debug)]
+pub struct Output {
+    output_type: OutputType,
+    content: String,
 }
-
-impl Output {
-    pub fn as_str(&self) -> &str {
-        match self {
-            Output::StdOut(s) => s.as_str(),
-            Output::StdErr(s) => s.as_str(),
-        }
-    }
-}
-
-impl PartialEq<&str> for Output {
-    fn eq(&self, other: &&str) -> bool {
-        self.as_str() == *other
-    }
-}
-
-impl PartialEq<String> for Output {
-    fn eq(&self, other: &String) -> bool {
-        self.as_str() == other.as_str()
-    }
-}
-
 impl fmt::Display for Output {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Output::StdOut(s) => write!(f, "StdOut: {}", s),
-            Output::StdErr(s) => write!(f, "StdErr: {}", s),
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}: {}", self.output_type, self.content)
+    }
+}
+
+impl Output {
+    pub fn new(output_type: OutputType, content: String) -> Self {
+        Self {
+            output_type,
+            content,
         }
+    }
+
+    pub fn as_str(&self) -> &str {
+        self.content.as_str()
+    }
+
+    pub fn get_type(&self) -> OutputType {
+        self.output_type
+    }
+
+    pub fn is_err(&self) -> bool {
+        self.output_type == OutputType::StdErr
     }
 }
 
@@ -244,9 +237,9 @@ fn process_stream(sender: &Sender<Output>, buffer: &[u8], is_stderr: bool) {
         let line = leftover.drain(..=newline_pos).collect::<Vec<_>>();
         let (decoded, _, _) = GB18030.decode(&line);
         let output = if is_stderr {
-            Output::StdErr(decoded.trim().to_owned())
+            Output::new(OutputType::StdErr, decoded.trim().to_owned())
         } else {
-            Output::StdOut(decoded.trim().to_owned())
+            Output::new(OutputType::StdOut, decoded.trim().to_owned())
         };
         sender.send(output).unwrap();
     }

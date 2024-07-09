@@ -29,7 +29,7 @@ mod tests {
         };
         let check_num = 2;
         let executor =
-            CommandRunner::run(&format!("ping {ping_count_option} {check_num} google.com"))
+            CommandRunner::run(&format!("ping {ping_count_option} {check_num} baidu.com"))
                 .unwrap();
         let mut output_count = 0;
         loop {

@@ -29,8 +29,7 @@ mod tests {
         };
         let check_num = 2;
         let executor =
-            CommandRunner::run(&format!("ping {ping_count_option} {check_num} baidu.com"))
-                .unwrap();
+            CommandRunner::run(&format!("ping {ping_count_option} {check_num} rust-lang.org")).unwrap();
         let mut output_count = 0;
         loop {
             match executor.get_status() {
@@ -122,17 +121,21 @@ mod tests {
             }
         }
 
-        // 按时间戳排序输出
-        // outputs.sort_by_key(|output| output.timestamp);
-
         // check outputs
         println!("the outputs are:{:?}", outputs);
 
         assert_eq!(outputs.len(), 4);
         assert_eq!(outputs[0].as_str(), "[1]:normal print.");
+        assert_eq!(outputs[0].get_type(), OutputType::StdOut);
+
         assert_eq!(outputs[1].as_str(), "[2]:error print.");
+        assert_eq!(outputs[1].get_type(), OutputType::StdErr);
+
         assert_eq!(outputs[2].as_str(), "[3]:normal print.");
+        assert_eq!(outputs[2].get_type(), OutputType::StdOut);
+
         assert_eq!(outputs[3].as_str(), "[4]:error print.");
+        assert_eq!(outputs[3].get_type(), OutputType::StdErr);
     }
 
     // #[test]

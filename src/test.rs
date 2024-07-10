@@ -28,8 +28,10 @@ mod tests {
             "-c"
         };
         let check_num = 2;
-        let executor =
-            CommandRunner::run(&format!("ping {ping_count_option} {check_num} rust-lang.org")).unwrap();
+        let executor = CommandRunner::run(&format!(
+            "ping {ping_count_option} {check_num} rust-lang.org"
+        ))
+        .unwrap();
         let mut output_count = 0;
         loop {
             match executor.get_status() {

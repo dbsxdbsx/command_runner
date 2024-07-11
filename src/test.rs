@@ -15,7 +15,7 @@ mod tests {
         // 创建一个CommandExecutor实例
         let mut executor = CommandRunner::run(command).unwrap();
         // 故意调用terminate方法
-        assert!(executor.terminate().is_ok());
+        executor.terminate();
         // 断言:
         assert_eq!(executor.get_status(), CommandStatus::ExceptionalTerminated);
     }

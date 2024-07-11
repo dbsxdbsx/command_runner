@@ -14,7 +14,7 @@
 
 1. **Command Execution**: Execute any command line instruction directly within your Rust application.
 2. **Execution Status Checking**: Easily check if executed commands succeeded or failed.
-3. **Real-time Output Capture**: Capture and monitor command output in real-time, mimicking terminal behavior.
+3. **Real-time Output Capture**: Capture and store command output in real-time, mimicking terminal behavior.
 4. **Interactive Input Handling**: Provide user input for commands that require it while capturing output.
 5. **Cross-Platform Support**: Consistent functionality across Linux, macOS, Windows, and mobile platforms like Android.
 6. **Efficient Concurrency with Green Threads**: Use lightweight green threads for efficient concurrent execution without OS thread overhead, integrating smoothly without explicit runtime usage.
@@ -24,12 +24,12 @@
 
 ## Exported Interfaces
 
-`fn run(command: &str) -> Result<Self>`
+`fn run(command: &str) -> AnyHow::Result<Self>`
 `fn terminate(&mut self)`
-`fn get_status(&mut self) -> CommandStatus`
-`fn input(&self, input: &str) -> Result<()>`
-`fn get_output(&self) -> Option<String>`
-`fn get_error(&self) -> Option<String>`
+`fn get_status(&self) -> CommandStatus`
+`fn get_one_line_output(&self) -> Option<Output>`
+
+`fn input(&self, input: &str) -> AnyHow::Result<()>`
 
 ## Command Status
 ```rust

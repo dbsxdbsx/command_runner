@@ -4,7 +4,7 @@ mod tests {
 
     #[test]
     fn test_invalid_command() {
-        let result = CommandRunner::run("non_existent_command");
+        let result = CommandRunner::new("non_existent_command");
         assert!(result.is_err(), "Expected an error for invalid command");
     }
 
@@ -13,11 +13,11 @@ mod tests {
         // 创建一个持续输出的命令
         let command = "ping -t 127.0.0.1";
         // 创建一个CommandExecutor实例
-        let mut executor = CommandRunner::run(command).unwrap();
+        let mut executor = CommandRunner::new(command).unwrap();
         // 故意调用terminate方法
-        executor.terminate();
+        executor.stop();
         // 断言:
-        assert_eq!(executor.get_status(), CommandStatus::ExceptionalTerminated);
+        assert_eq!(executor.check_status(), CommandStatus::Stopped);
     }
 
     #[test]
@@ -28,27 +28,21 @@ mod tests {
             "-c"
         };
         let check_num = 2;
-        let executor = CommandRunner::run(&format!(
+        let executor = CommandRunner::new(&format!(
             "ping {ping_count_option} {check_num} rust-lang.org"
         ))
         .unwrap();
         let mut output_count = 0;
         loop {
-            match executor.get_status() {
+            match executor.check_status() {
                 CommandStatus::Running => {
                     if let Some(output) = executor.get_one_line_output() {
                         output_count += 1;
                         assert_eq!(output.get_type(), OutputType::StdOut);
                     }
                 }
-                CommandStatus::ExitedWithOkStatus => {
+                CommandStatus::Stopped => {
                     break;
-                }
-                CommandStatus::WaitingInput => {
-                    panic!("There should not be `WaitingForInput` status");
-                }
-                CommandStatus::ExceptionalTerminated => {
-                    panic!("Built-in Command terminated with error");
                 }
             }
         }
@@ -63,10 +57,10 @@ mod tests {
 
     #[test]
     fn test_receiving_output_by_python_script() {
-        let executor = CommandRunner::run("python ./tests/test_output.py").unwrap();
+        let executor = CommandRunner::new("python ./tests/test_output.py").unwrap();
         let mut all_output = Vec::new();
         loop {
-            match executor.get_status() {
+            match executor.check_status() {
                 CommandStatus::Running => {
                     // 收集输出
                     // 由于python较慢(故意延迟),所以会捕获许多`None`
@@ -75,15 +69,9 @@ mod tests {
                         all_output.push(output);
                     }
                 }
-                CommandStatus::ExitedWithOkStatus => {
-                    println!("Custom application command execution completed");
+
+                CommandStatus::Stopped => {
                     break;
-                }
-                CommandStatus::WaitingInput => {
-                    panic!("There should not be `WaitingForInput` status");
-                }
-                CommandStatus::ExceptionalTerminated => {
-                    panic!("Custom application command execution error");
                 }
             }
         }
@@ -100,25 +88,18 @@ mod tests {
 
     #[test]
     fn test_receiving_error_and_output_by_python_script() {
-        let executor = CommandRunner::run("python ./tests/test_error.py").unwrap();
+        let executor = CommandRunner::new("python ./tests/test_error.py").unwrap();
         let mut outputs = Vec::new();
 
         loop {
-            match executor.get_status() {
+            match executor.check_status() {
                 CommandStatus::Running => {
                     if let Some(output) = executor.get_one_line_output() {
                         outputs.push(output);
                     }
                 }
-                CommandStatus::ExitedWithOkStatus => {
-                    println!("Python script execution completed");
+                CommandStatus::Stopped => {
                     break;
-                }
-                CommandStatus::WaitingInput => {
-                    panic!("There should not be a `WaitingForInput` status");
-                }
-                CommandStatus::ExceptionalTerminated => {
-                    panic!("Python script execution error");
                 }
             }
         }

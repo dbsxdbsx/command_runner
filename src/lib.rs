@@ -6,137 +6,167 @@ use crate::status::CommandStatus;
 
 use anyhow::Result;
 use crossbeam::channel::{unbounded, Receiver, Sender};
-use std::io::{BufRead, BufReader, Write};
+use encoding_rs::GB18030;
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
 pub struct CommandRunner {
-    child: Arc<Mutex<Child>>,
+    command: Command,
+    child: Arc<Mutex<Option<Child>>>,
+    output_sender: Sender<Output>,
     output_receiver: Receiver<Output>,
-    status: Arc<Mutex<CommandStatus>>,
-    input_sender: Sender<String>,
-    thread: Option<JoinHandle<()>>,
+    threads: Vec<JoinHandle<()>>,
 }
 
 impl CommandRunner {
-    pub fn run(command: &str) -> Result<Self> {
-        let (output_sender, output_receiver) = unbounded();
-        let (input_sender, input_receiver) = unbounded();
-        let status = Arc::new(Mutex::new(CommandStatus::Running));
-
+    pub fn new(command: &str) -> Result<Self> {
+        // init command
         let parts: Vec<&str> = command.split_whitespace().collect();
-        let (cmd, args) = if parts.len() > 1 {
+        let (cmd_root, cmd_args) = if parts.len() > 1 {
             (parts[0], &parts[1..])
         } else {
             (parts[0], &[][..])
         };
-        let child_arc = Arc::new(Mutex::new(
-            Command::new(cmd)
-                .args(args)
-                .stdin(Stdio::piped())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?,
-        ));
+        let mut command = Command::new(cmd_root);
+        command
+            .args(cmd_args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
-        let sender = output_sender.clone();
-        let child = Arc::clone(&child_arc);
-        let status_clone = Arc::clone(&status);
-        let thread = thread::spawn({
-            // 处理stdout和stderr
-            let stdout = child.lock().unwrap().stdout.take().unwrap();
-            let stderr = child.lock().unwrap().stderr.take().unwrap();
-            let stdout_reader = BufReader::new(stdout);
-            let stderr_reader = BufReader::new(stderr);
+        // init output channel
+        let (output_sender, output_receiver) = unbounded();
 
-            let mut stdout_lines = stdout_reader.lines();
-            let mut stderr_lines = stderr_reader.lines();
+        // use `.spawn()` to check it the command is valid, if valid, termiate it immediately.
+        let mut child = command.spawn()?;
+        child.kill().unwrap();
+        child.wait().unwrap();
 
-            let tmp_status = *status_clone.lock().unwrap();
-            let is_terminated = tmp_status == CommandStatus::ExceptionalTerminated
-                || tmp_status == CommandStatus::ExitedWithOkStatus;
-            while !is_terminated {
-                match (stdout_lines.next(), stderr_lines.next()) {
-                    (Some(Ok(line)), _) => {
-                        sender.send(Output::new(OutputType::StdOut, line)).unwrap();
-                    }
-                    (_, Some(Ok(line))) => {
-                        sender.send(Output::new(OutputType::StdErr, line)).unwrap();
-                    }
-                    (None, None) => break,
-                    _ => {}
-                }
-            }
-
-            // TODO:处理stdin
-            // let stdin_handle = thread::spawn({
-            //     let child = Arc::clone(&child_arc);
-            //     let status = Arc::clone(&status_clone);
-            //     move || {
-            //         let mut stdin = child.lock().unwrap().stdin.take().unwrap();
-            //         for input in input_receiver {
-            //             if let Err(_) = writeln!(stdin, "{}", input) {
-            //                 break;
-            //             }
-            //             *status.lock().unwrap() = CommandStatus::Running;
-            //         }
-            //     }
-            // });
-
-            // 监控子进程状态
-            let child = Arc::clone(&child_arc);
-            let status = Arc::clone(&status_clone);
-            move || {
-                let exit_status = child.lock().unwrap().wait().unwrap();
-                if exit_status.success() {
-                    *status.lock().unwrap() = CommandStatus::ExitedWithOkStatus;
-                } else {
-                    *status.lock().unwrap() = CommandStatus::ExceptionalTerminated;
-                }
-            }
-        });
-
+        // return new instance
         Ok(Self {
-            child: child_arc,
+            command,
+            child: Arc::new(Mutex::new(None)),
+            output_sender,
             output_receiver,
-            status: status_clone,
-            input_sender,
-            thread: Some(thread),
+            threads: Vec::new(),
         })
     }
 
-    pub fn terminate(&mut self) {
-        // update status
-        *self.status.lock().unwrap() = CommandStatus::ExceptionalTerminated;
-
-        // wait for thread to exit
-        if let Some(thread) = self.thread.take() {
-            thread.join().unwrap();
+    pub fn run(&mut self) {
+        // 停止之前的进程(如果存在)
+        if self.is_running() {
+            self.stop();
         }
-        // send terminate signal to child process
-        self.child.lock().unwrap().kill().unwrap();
-        let _ = self.child.lock().unwrap().wait().unwrap();
+
+        // 初始化子进程
+        let mut child = self.command.spawn().unwrap();
+
+        // 对于 stdout 流
+        let stdout = child.stdout.take().unwrap();
+        let stdout_child = Arc::clone(&self.child);
+        let stdout_sender = self.output_sender.clone();
+        let stdout_thread = thread::spawn(move || {
+            process_stream(stdout, &stdout_sender, false, stdout_child);
+        });
+
+        // 对于 stderr 流
+        let stderr = child.stderr.take().unwrap();
+        let stderr_child = Arc::clone(&self.child);
+        let stderr_sender = self.output_sender.clone();
+        let stderr_thread = thread::spawn(move || {
+            process_stream(stderr, &stderr_sender, true, stderr_child);
+        });
+
+        // 收集线程
+        self.threads.push(stdout_thread);
+        self.threads.push(stderr_thread);
+
+        // update child process
+        *self.child.lock().unwrap() = Some(child);
     }
 
-    pub fn get_status(&self) -> CommandStatus {
-        *self.status.lock().unwrap()
+    pub fn stop(&mut self) {
+        // wait for threads to finish
+        for thread in self.threads.drain(..) {
+            thread.join().unwrap();
+        }
+
+        // kill child process first
+        if let Some(mut child) = self.child.lock().unwrap().take() {
+            child.kill().unwrap();
+            child.wait().unwrap();
+        }
+
+        // clear threads vec
+        self.threads.clear();
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        matches!(self.check_status(), CommandStatus::Stopped)
+    }
+
+    pub fn is_running(&self) -> bool {
+        matches!(self.check_status(), CommandStatus::Running)
+    }
+
+    pub fn check_status(&self) -> CommandStatus {
+        check_status(&self.child)
     }
 
     pub fn get_one_line_output(&self) -> Option<Output> {
         self.output_receiver.try_recv().ok()
     }
-
-    // TODO: 实现input方法
-    // pub fn input(&self, input: &str) -> Result<()> {
-    //     self.input_sender.send(input.to_string())?;
-    //     Ok(())
-    // }
 }
 
 impl Drop for CommandRunner {
     fn drop(&mut self) {
-        self.terminate();
+        self.stop();
+    }
+}
+
+fn process_stream<R: Read>(
+    mut stream: R,
+    sender: &Sender<Output>,
+    is_stderr: bool,
+    child: Arc<Mutex<Option<Child>>>,
+) {
+    let mut buffer = [0; 1024];
+    let mut leftover = Vec::new();
+
+    while check_status(&child) != CommandStatus::Stopped {
+        match stream.read(&mut buffer) {
+            Ok(0) => break, // 流结束
+            Ok(n) => {
+                leftover.extend_from_slice(&buffer[..n]);
+                process_buffer(sender, &mut leftover, is_stderr);
+            }
+            Err(_) => break, // 读取错误
+        }
+    }
+}
+
+fn check_status(child: &Arc<Mutex<Option<Child>>>) -> CommandStatus {
+    if let Some(result) = child.lock().unwrap().as_mut().unwrap().try_wait().ok() {
+        match result {
+            Some(_) => CommandStatus::Stopped,
+            None => CommandStatus::Running,
+        }
+    } else {
+        CommandStatus::Stopped
+    }
+}
+
+fn process_buffer(sender: &Sender<Output>, buffer: &mut Vec<u8>, is_stderr: bool) {
+    while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
+        let line = buffer.drain(..=newline_pos).collect::<Vec<_>>();
+        let (decoded, _, _) = GB18030.decode(&line);
+        let output = if is_stderr {
+            Output::new(OutputType::StdErr, decoded.trim().to_owned())
+        } else {
+            Output::new(OutputType::StdOut, decoded.trim().to_owned())
+        };
+        sender.send(output).unwrap();
     }
 }

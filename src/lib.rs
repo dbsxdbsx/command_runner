@@ -174,6 +174,19 @@ fn process_stream<R: Read>(
     }
 }
 
+fn process_buffer(sender: &Sender<Output>, buffer: &mut Vec<u8>, is_stderr: bool) {
+    while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
+        let line = buffer.drain(..=newline_pos).collect::<Vec<_>>();
+        let (decoded, _, _) = GB18030.decode(&line);
+        let output = if is_stderr {
+            Output::new(OutputType::StdErr, decoded.trim().to_owned())
+        } else {
+            Output::new(OutputType::StdOut, decoded.trim().to_owned())
+        };
+        sender.send(output).unwrap();
+    }
+}
+
 fn check_child_process_status(child: &Arc<Mutex<Option<Child>>>) -> CommandStatus {
     let mut status = CommandStatus::Stopped;
     if let Ok(mut child_guard) = child.lock() {
@@ -187,17 +200,4 @@ fn check_child_process_status(child: &Arc<Mutex<Option<Child>>>) -> CommandStatu
         }
     }
     status
-}
-
-fn process_buffer(sender: &Sender<Output>, buffer: &mut Vec<u8>, is_stderr: bool) {
-    while let Some(newline_pos) = buffer.iter().position(|&b| b == b'\n') {
-        let line = buffer.drain(..=newline_pos).collect::<Vec<_>>();
-        let (decoded, _, _) = GB18030.decode(&line);
-        let output = if is_stderr {
-            Output::new(OutputType::StdErr, decoded.trim().to_owned())
-        } else {
-            Output::new(OutputType::StdOut, decoded.trim().to_owned())
-        };
-        sender.send(output).unwrap();
-    }
 }

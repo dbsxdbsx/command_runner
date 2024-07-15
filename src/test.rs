@@ -105,40 +105,34 @@ mod tests {
         }
     }
 
-    // #[test]
-    // fn test_receiving_error_and_output_by_python_script() {
-    //     let executor = CommandRunner::new("python ./tests/test_error.py").unwrap();
-    //     let mut outputs = Vec::new();
+    #[test]
+    fn test_std_output_and_error_from_python_script() {
+        let mut executor = CommandRunner::new("python ./tests/test_error.py").unwrap();
+        executor.run();
+        
+        let mut outputs = Vec::new();
+        while executor.is_running() {
+            if let Some(output) = executor.get_one_line_output() {
+                outputs.push(output);
+            }
+        }
 
-    //     loop {
-    //         match executor.check_status() {
-    //             CommandStatus::Running => {
-    //                 if let Some(output) = executor.get_one_line_output() {
-    //                     outputs.push(output);
-    //                 }
-    //             }
-    //             CommandStatus::Stopped => {
-    //                 break;
-    //             }
-    //         }
-    //     }
+        // check outputs
+        println!("the outputs are:{:?}", outputs);
 
-    //     // check outputs
-    //     println!("the outputs are:{:?}", outputs);
+        assert_eq!(outputs.len(), 4);
+        assert_eq!(outputs[0].as_str(), "[1]:normal print.");
+        assert_eq!(outputs[0].get_type(), OutputType::StdOut);
 
-    //     assert_eq!(outputs.len(), 4);
-    //     assert_eq!(outputs[0].as_str(), "[1]:normal print.");
-    //     assert_eq!(outputs[0].get_type(), OutputType::StdOut);
+        assert_eq!(outputs[1].as_str(), "[2]:error print.");
+        assert_eq!(outputs[1].get_type(), OutputType::StdErr);
 
-    //     assert_eq!(outputs[1].as_str(), "[2]:error print.");
-    //     assert_eq!(outputs[1].get_type(), OutputType::StdErr);
+        assert_eq!(outputs[2].as_str(), "[3]:normal print.");
+        assert_eq!(outputs[2].get_type(), OutputType::StdOut);
 
-    //     assert_eq!(outputs[2].as_str(), "[3]:normal print.");
-    //     assert_eq!(outputs[2].get_type(), OutputType::StdOut);
-
-    //     assert_eq!(outputs[3].as_str(), "[4]:error print.");
-    //     assert_eq!(outputs[3].get_type(), OutputType::StdErr);
-    // }
+        assert_eq!(outputs[3].as_str(), "[4]:error print.");
+        assert_eq!(outputs[3].get_type(), OutputType::StdErr);
+    }
 
     // #[test]
     // fn test_sending_input_when_command_is_inited_by_python_script() {

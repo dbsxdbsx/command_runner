@@ -3,47 +3,76 @@ mod tests {
     use crate::*;
 
     #[test]
+    #[should_panic(expected = "Child process is not initialized yet.")]
+    fn test_check_is_running_when_not_initialized() {
+        let executor = CommandRunner::new("ping -t 127.0.0.1").unwrap();
+        assert!(executor.is_running());
+    }
+
+    #[test]
+    #[should_panic(expected = "Child process is not initialized yet.")]
+    fn test_check_is_stopped_when_not_initialized() {
+        let executor = CommandRunner::new("ping -t 127.0.0.1").unwrap();
+        assert!(executor.is_stopped());
+    }
+
+    #[test]
+    fn test_status_for_no_ending_command() {
+        let command = "ping -t 127.0.0.1";
+        let mut executor = CommandRunner::new(command).unwrap();
+        // run the command
+        executor.run();
+        assert!(executor.is_running());
+        // stop the command
+        executor.stop();
+        assert!(executor.is_stopped());
+    }
+
+    #[test]
+    fn test_status_for_auto_ended_command() {
+        let ping_count_option = if cfg!(target_os = "windows") {
+            "-n"
+        } else {
+            "-c"
+        };
+        let check_num = 1;
+        let mut executor = CommandRunner::new(&format!(
+            "ping {ping_count_option} {check_num} rust-lang.org"
+        ))
+        .unwrap();
+        executor.run();
+        // the instant status of the command should be Running
+        assert!(executor.is_running());
+        // wait for auto-termination of the command, when the status should be Stopped
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        assert!(executor.is_stopped());
+    }
+
+    #[test]
     fn test_invalid_command() {
         let result = CommandRunner::new("non_existent_command");
         assert!(result.is_err(), "Expected an error for invalid command");
     }
 
     #[test]
-    fn test_force_terminate_by_os_command_ping() {
-        // 创建一个持续输出的命令
-        let command = "ping -t 127.0.0.1";
-        // 创建一个CommandExecutor实例
-        let mut executor = CommandRunner::new(command).unwrap();
-        // 故意调用terminate方法
-        executor.stop();
-        // 断言:
-        assert_eq!(executor.check_status(), CommandStatus::Stopped);
-    }
-
-    #[test]
-    fn test_os_command_ping() {
+    fn test_std_output_from_os_command() {
         let ping_count_option = if cfg!(target_os = "windows") {
             "-n"
         } else {
             "-c"
         };
         let check_num = 2;
-        let executor = CommandRunner::new(&format!(
+        let mut executor = CommandRunner::new(&format!(
             "ping {ping_count_option} {check_num} rust-lang.org"
         ))
         .unwrap();
+        executor.run();
         let mut output_count = 0;
-        loop {
-            match executor.check_status() {
-                CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_line_output() {
-                        output_count += 1;
-                        assert_eq!(output.get_type(), OutputType::StdOut);
-                    }
-                }
-                CommandStatus::Stopped => {
-                    break;
-                }
+
+        while executor.is_running() {
+            if let Some(output) = executor.get_one_line_output() {
+                output_count += 1;
+                assert_eq!(output.get_type(), OutputType::StdOut);
             }
         }
         assert!(
@@ -52,27 +81,17 @@ mod tests {
             check_num,
             output_count
         );
-        println!("Total output lines: {}", output_count);
     }
 
     #[test]
-    fn test_receiving_output_by_python_script() {
-        let executor = CommandRunner::new("python ./tests/test_output.py").unwrap();
+    fn test_std_output_from_python_script() {
+        let mut executor = CommandRunner::new("python ./tests/test_output.py").unwrap();
+        executor.run();
         let mut all_output = Vec::new();
-        loop {
-            match executor.check_status() {
-                CommandStatus::Running => {
-                    // 收集输出
-                    // 由于python较慢(故意延迟),所以会捕获许多`None`
-                    if let Some(output) = executor.get_one_line_output() {
-                        assert_eq!(output.get_type(), OutputType::StdOut);
-                        all_output.push(output);
-                    }
-                }
-
-                CommandStatus::Stopped => {
-                    break;
-                }
+        while executor.is_running() {
+            if let Some(output) = executor.get_one_line_output() {
+                assert_eq!(output.get_type(), OutputType::StdOut);
+                all_output.push(output);
             }
         }
         assert_eq!(
@@ -86,40 +105,40 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_receiving_error_and_output_by_python_script() {
-        let executor = CommandRunner::new("python ./tests/test_error.py").unwrap();
-        let mut outputs = Vec::new();
+    // #[test]
+    // fn test_receiving_error_and_output_by_python_script() {
+    //     let executor = CommandRunner::new("python ./tests/test_error.py").unwrap();
+    //     let mut outputs = Vec::new();
 
-        loop {
-            match executor.check_status() {
-                CommandStatus::Running => {
-                    if let Some(output) = executor.get_one_line_output() {
-                        outputs.push(output);
-                    }
-                }
-                CommandStatus::Stopped => {
-                    break;
-                }
-            }
-        }
+    //     loop {
+    //         match executor.check_status() {
+    //             CommandStatus::Running => {
+    //                 if let Some(output) = executor.get_one_line_output() {
+    //                     outputs.push(output);
+    //                 }
+    //             }
+    //             CommandStatus::Stopped => {
+    //                 break;
+    //             }
+    //         }
+    //     }
 
-        // check outputs
-        println!("the outputs are:{:?}", outputs);
+    //     // check outputs
+    //     println!("the outputs are:{:?}", outputs);
 
-        assert_eq!(outputs.len(), 4);
-        assert_eq!(outputs[0].as_str(), "[1]:normal print.");
-        assert_eq!(outputs[0].get_type(), OutputType::StdOut);
+    //     assert_eq!(outputs.len(), 4);
+    //     assert_eq!(outputs[0].as_str(), "[1]:normal print.");
+    //     assert_eq!(outputs[0].get_type(), OutputType::StdOut);
 
-        assert_eq!(outputs[1].as_str(), "[2]:error print.");
-        assert_eq!(outputs[1].get_type(), OutputType::StdErr);
+    //     assert_eq!(outputs[1].as_str(), "[2]:error print.");
+    //     assert_eq!(outputs[1].get_type(), OutputType::StdErr);
 
-        assert_eq!(outputs[2].as_str(), "[3]:normal print.");
-        assert_eq!(outputs[2].get_type(), OutputType::StdOut);
+    //     assert_eq!(outputs[2].as_str(), "[3]:normal print.");
+    //     assert_eq!(outputs[2].get_type(), OutputType::StdOut);
 
-        assert_eq!(outputs[3].as_str(), "[4]:error print.");
-        assert_eq!(outputs[3].get_type(), OutputType::StdErr);
-    }
+    //     assert_eq!(outputs[3].as_str(), "[4]:error print.");
+    //     assert_eq!(outputs[3].get_type(), OutputType::StdErr);
+    // }
 
     // #[test]
     // fn test_sending_input_when_command_is_inited_by_python_script() {

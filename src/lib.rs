@@ -9,6 +9,7 @@ use crossbeam::channel::{unbounded, Receiver, Sender};
 use encoding_rs::GB18030;
 use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
@@ -18,6 +19,7 @@ pub struct CommandRunner {
     output_sender: Sender<Output>,
     output_receiver: Receiver<Output>,
     threads: Vec<JoinHandle<()>>,
+    force_stop: Arc<AtomicBool>,
 }
 
 impl CommandRunner {
@@ -51,32 +53,47 @@ impl CommandRunner {
             output_sender,
             output_receiver,
             threads: Vec::new(),
+            force_stop: Arc::new(AtomicBool::new(false)),
         })
     }
 
     pub fn run(&mut self) {
         // 停止之前的进程(如果存在)
-        if self.is_running() {
-            self.stop();
-        }
+        self.stop();
 
-        // 初始化子进程
+        // 初始化子进程和相关字段
         let mut child = self.command.spawn().unwrap();
+        self.force_stop
+            .store(false, std::sync::atomic::Ordering::SeqCst);
 
         // 对于 stdout 流
+        let force_stop_for_stdout = Arc::clone(&self.force_stop);
         let stdout = child.stdout.take().unwrap();
         let stdout_child = Arc::clone(&self.child);
         let stdout_sender = self.output_sender.clone();
         let stdout_thread = thread::spawn(move || {
-            process_stream(stdout, &stdout_sender, false, stdout_child);
+            process_stream(
+                stdout,
+                &stdout_sender,
+                false,
+                stdout_child,
+                force_stop_for_stdout,
+            );
         });
 
         // 对于 stderr 流
+        let force_stop_for_stderr = Arc::clone(&self.force_stop);
         let stderr = child.stderr.take().unwrap();
         let stderr_child = Arc::clone(&self.child);
         let stderr_sender = self.output_sender.clone();
         let stderr_thread = thread::spawn(move || {
-            process_stream(stderr, &stderr_sender, true, stderr_child);
+            process_stream(
+                stderr,
+                &stderr_sender,
+                true,
+                stderr_child,
+                force_stop_for_stderr,
+            );
         });
 
         // 收集线程
@@ -88,13 +105,17 @@ impl CommandRunner {
     }
 
     pub fn stop(&mut self) {
+        // set force stop flag
+        self.force_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
         // wait for threads to finish
         for thread in self.threads.drain(..) {
             thread.join().unwrap();
         }
 
         // kill child process first
-        if let Some(mut child) = self.child.lock().unwrap().take() {
+        if let Some(child) = self.child.lock().unwrap().as_mut() {
             child.kill().unwrap();
             child.wait().unwrap();
         }
@@ -104,15 +125,18 @@ impl CommandRunner {
     }
 
     pub fn is_stopped(&self) -> bool {
-        matches!(self.check_status(), CommandStatus::Stopped)
+        matches!(self.check_status().unwrap(), CommandStatus::Stopped)
     }
 
     pub fn is_running(&self) -> bool {
-        matches!(self.check_status(), CommandStatus::Running)
+        matches!(self.check_status().unwrap(), CommandStatus::Running)
     }
 
-    pub fn check_status(&self) -> CommandStatus {
-        check_status(&self.child)
+    fn check_status(&self) -> Result<CommandStatus, String> {
+        if self.child.lock().unwrap().is_none() {
+            return Err("Child process is not initialized yet.".to_string());
+        }
+        Ok(check_child_process_status(&self.child))
     }
 
     pub fn get_one_line_output(&self) -> Option<Output> {
@@ -131,11 +155,14 @@ fn process_stream<R: Read>(
     sender: &Sender<Output>,
     is_stderr: bool,
     child: Arc<Mutex<Option<Child>>>,
+    force_stop: Arc<AtomicBool>,
 ) {
     let mut buffer = [0; 1024];
     let mut leftover = Vec::new();
 
-    while check_status(&child) != CommandStatus::Stopped {
+    while !force_stop.load(std::sync::atomic::Ordering::SeqCst)
+        && check_child_process_status(&child) != CommandStatus::Stopped
+    {
         match stream.read(&mut buffer) {
             Ok(0) => break, // 流结束
             Ok(n) => {
@@ -147,15 +174,19 @@ fn process_stream<R: Read>(
     }
 }
 
-fn check_status(child: &Arc<Mutex<Option<Child>>>) -> CommandStatus {
-    if let Some(result) = child.lock().unwrap().as_mut().unwrap().try_wait().ok() {
-        match result {
-            Some(_) => CommandStatus::Stopped,
-            None => CommandStatus::Running,
+fn check_child_process_status(child: &Arc<Mutex<Option<Child>>>) -> CommandStatus {
+    let mut status = CommandStatus::Stopped;
+    if let Ok(mut child_guard) = child.lock() {
+        if let Some(child) = child_guard.as_mut() {
+            if let Ok(result) = child.try_wait() {
+                match result {
+                    Some(_) => status = CommandStatus::Stopped,
+                    None => status = CommandStatus::Running,
+                }
+            }
         }
-    } else {
-        CommandStatus::Stopped
     }
+    status
 }
 
 fn process_buffer(sender: &Sender<Output>, buffer: &mut Vec<u8>, is_stderr: bool) {

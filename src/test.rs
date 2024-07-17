@@ -109,7 +109,7 @@ mod tests {
     fn test_std_output_and_error_from_python_script() {
         let mut executor = CommandRunner::new("python ./tests/test_error.py").unwrap();
         executor.run();
-        
+
         let mut outputs = Vec::new();
         while executor.is_running() {
             if let Some(output) = executor.get_one_line_output() {
